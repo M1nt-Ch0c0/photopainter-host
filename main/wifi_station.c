@@ -84,6 +84,8 @@ esp_err_t photopainter_wifi_connect(const char *ssid, const char *password)
     memset(&station, 0, sizeof(station));
     ESP_RETURN_ON_ERROR(err, TAG, "set station config");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "esp_wifi_start");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG,
+                        "disable station power save");
 
     xEventGroupWaitBits(s_events, CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     return ESP_OK;
