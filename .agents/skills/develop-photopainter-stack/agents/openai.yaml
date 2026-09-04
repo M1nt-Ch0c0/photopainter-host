@@ -1,0 +1,4 @@
+interface:
+  display_name: "Develop PhotoPainter Stack"
+  short_description: "Bootstrap, develop, and debug PhotoPainter"
+  default_prompt: "Use $develop-photopainter-stack to bootstrap this machine and diagnose the connected PhotoPainter."
