@@ -1,6 +1,8 @@
 #include "push_server.h"
 
 #include "app_catalog.h"
+#include "wifi_sd.h"
+#include "wifi_profiles_json.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -380,6 +382,57 @@ static esp_err_t module_handler(httpd_req_t *request)
     return response;
 }
 
+static esp_err_t wifi_handler(httpd_req_t *request)
+{
+    /* Do not mount/read SD or receive credentials before authentication. */
+    if (!s_push_token_length)
+        return send_text(request, "503 Service Unavailable", "token not configured\n");
+    if (!request_is_authorized(request))
+        return send_text(request, "401 Unauthorized", "unauthorized\n");
+    if (request->content_len > 8192)
+        return send_text(request, "413 Content Too Large", "Wi-Fi JSON exceeds 8192 bytes\n");
+    if (xSemaphoreTake(s_display_lock, 0) != pdTRUE)
+        return send_text(request, "409 Conflict", "busy\n");
+    wifi_profiles_t profiles;
+    esp_err_t response;
+    if (request->method == HTTP_GET) {
+        esp_err_t e = wifi_sd_load(NULL, false, &profiles);
+        char *json = NULL;
+        if (e == ESP_OK) e = wifi_profiles_encode(&profiles, &json);
+        if (e == ESP_OK) {
+            httpd_resp_set_type(request, "application/json");
+            httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+            httpd_resp_set_hdr(request, "Connection", "close");
+            response = httpd_resp_sendstr(request, json);
+        } else {
+            response = send_text(request, e == ESP_ERR_NOT_FOUND ? "404 Not Found" :
+                e == ESP_ERR_INVALID_ARG ? "409 Conflict" : "503 Service Unavailable",
+                "SD Wi-Fi configuration unavailable; no changes made\n");
+        }
+        free(json);
+    } else {
+        char type[40] = {0};
+        httpd_req_get_hdr_value_str(request, "Content-Type", type, sizeof(type));
+        if (strcasecmp(type, "application/json")) {
+            response = send_text(request, "415 Unsupported Media Type", "application/json required\n");
+        } else {
+            uint8_t *body = malloc(request->content_len + 1);
+            esp_err_t e = body ? receive_body(request, body, request->content_len) : ESP_ERR_NO_MEM;
+            if (e == ESP_OK) e = wifi_profiles_parse((char *)body, request->content_len, &profiles);
+            free(body);
+            if (e == ESP_OK) e = wifi_sd_save(&profiles);
+            const char *status = e == ESP_OK ? "200 OK" :
+                e == ESP_ERR_TIMEOUT ? "408 Request Timeout" :
+                e == ESP_ERR_INVALID_ARG ? "422 Unprocessable Content" :
+                e == ESP_ERR_INVALID_STATE ? "409 Conflict" : "503 Service Unavailable";
+            response = send_text(request, status, e == ESP_OK ?
+                "SD Wi-Fi saved; effective on next reboot\n" : "SD Wi-Fi update failed\n");
+        }
+    }
+    xSemaphoreGive(s_display_lock);
+    return response;
+}
+
 esp_err_t photopainter_push_server_start(const char *push_token)
 {
     if (push_token == NULL)
@@ -419,7 +472,7 @@ esp_err_t photopainter_push_server_start(const char *push_token)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.stack_size = 16384;
-    config.max_uri_handlers = 3;
+    config.max_uri_handlers = 5;
     config.max_open_sockets = 3;
     config.recv_wait_timeout = 10;
     config.send_wait_timeout = 60;
@@ -465,6 +518,13 @@ esp_err_t photopainter_push_server_start(const char *push_token)
         httpd_stop(server);
         return err;
     }
+    const httpd_uri_t wifi_get = {
+        .uri = "/api/wifi", .method = HTTP_GET, .handler = wifi_handler};
+    const httpd_uri_t wifi_post = {
+        .uri = "/api/wifi", .method = HTTP_POST, .handler = wifi_handler};
+    err = httpd_register_uri_handler(server, &wifi_get);
+    if (err == ESP_OK) err = httpd_register_uri_handler(server, &wifi_post);
+    if (err != ESP_OK) { httpd_stop(server); return err; }
     ESP_LOGI(TAG, "POST /api/push ready");
     return ESP_OK;
 }

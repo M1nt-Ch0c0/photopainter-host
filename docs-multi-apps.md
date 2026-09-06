@@ -17,7 +17,7 @@ SD 卡的 `config/wifi.json` 继续使用原格式：
 
 启动优先读取 SD 文件；主文件不存在时允许读取 `.bak`。合法空列表是明确的空配置；损坏主文件不会被 `.bak` 或 NVS 掩盖。没有卡或没有配置文件时读取 NVS `wifi_profiles`，只有该键不存在才兼容原 `wifi_ssid` / `wifi_pass` 单组配置。NVS 多组数据同样经过校验。
 
-SD 只在启动时挂载、读取或首次迁移 Wi-Fi 配置后卸载，不格式化、不访问照片；SDMMC 引脚来自官方 PhotoPainter `a5e8f757ba0c` 的 `sdcard_bsp.h`：CLK 39、CMD 41、D0 40、D1 1、D2 2、D3 38。SD 与面板 SPI 总线分开。板上没有卡检测信号，初始化命令超时按无卡处理，其他挂载错误会停止配网并保留原数据。
+SD 在启动读取/首次迁移或鉴权配置请求期间挂载，操作结束卸载，不格式化、不访问照片；SDMMC 引脚来自官方 PhotoPainter `a5e8f757ba0c` 的 `sdcard_bsp.h`：CLK 39、CMD 41、D0 40、D1 1、D2 2、D3 38。SD 与面板 SPI 总线分开。板上没有卡检测信号，初始化命令超时按无卡处理，其他挂载错误会停止配网并保留原数据。
 
 连接由一个常驻任务管理，每组等待连接/IP 最多 20 秒；明确断线或连接错误可提前尝试下一组。连接成功后保持当前网络；断线后从最高优先级重新尝试。全部失败等待 5 秒后重新遍历，永不因连接失败删除凭据。Wi-Fi 保持 `WIFI_PS_NONE`。
 
@@ -34,6 +34,18 @@ python3 tools/wifi_profiles.py status --file /Volumes/SD/config/wifi.json
 ```
 
 管理工具采用相同的 `.tmp`/`.bak` 发布规则；已有主文件损坏时拒绝修改，不能通过备份掩盖。status 同时返回 `main`、`backup` 或 `missing` 来源，区分明确空列表与文件不存在。序号从 1 开始。移除最后一个网络会保存明确的空列表。编辑卡前关机取卡并备份，完成后插回设备重启。
+
+在线设备可使用同一端口 80、同一 Bearer 令牌的 `GET/POST /api/wifi` 管理卡上配置。GET 只读取 SD JSON（主文件缺失时可读 `.bak`），不会从 NVS 迁移；响应包含密码，CLI 只将它写入新建的 0600 私有备份文件，不打印正文，也不覆盖已有备份。POST 接受至多 8192 字节 `application/json`，校验后通过相同 `.tmp`/`.bak` 流程保存，下次重启生效。它不改 NVS、不触发重启、不刷新屏幕。无效请求在 SD 写入前拒绝；原文件损坏则拒绝覆盖。接口与推图/应用管理共用操作锁。
+
+```bash
+# 先备份，再在另一份私有副本上编辑；不要将备份放进源码仓库。
+python3 tools/wifi_device.py backup --url http://DEVICE_IP --file /private/path/original-wifi.json
+# 用 wifi_profiles.py 修改私有副本，再上传。
+python3 tools/wifi_device.py update --url http://DEVICE_IP --file /private/path/edited-wifi.json
+# 手动重启后生效；需要恢复时上传 original-wifi.json 并重启。
+```
+
+GET 缺卡/缺配置返回 404、坏 JSON 返回 409、其他 SD 错误返回 503。POST 超限返回 413、错误类型 415、无效 JSON 422、坏已有文件 409，其他存储错误 503；未配置令牌 503、鉴权失败 401。POST 200 仅表示 SD 保存完成。配置成空列表或全部不可达后，HTTP 无法帮助恢复，应使用 SD 文件或串口恢复入口。工具禁用代理和重定向，不自动重试更新。
 
 无卡部署可将同格式的私有文件写入 NVS：
 
@@ -135,4 +147,4 @@ python3 -m esptool --chip esp32s3 --port /dev/cu.YOUR_DEVICE write-flash \
 
 不写旧槽、网络 NVS 或 `elf_state`；首次新宿主启动会导入原日志。首次全新设备的种子部署仍见 [旧双槽文档](docs-module-slots.md)，但使用当前分区表。升级后不要直接降级旧宿主：它不理解新目录，可能使用已经过时的旧 `state`；若需整机恢复应按已备份镜像完整恢复。
 
-本地验证包括 C 状态机、实际加载器调用层（模拟 Registry ELF 执行）、C JSON 解析、NVS 包格式及 ESP-IDF 构建。模拟执行不等于真机刷新。SD 卡与两个真实网络的切换、设备断电、多应用物理刷新仍需各自实机验收记录。
+本地验证包括 C 状态机、实际加载器调用层（模拟 Registry ELF 执行）、C JSON 解析、NVS 包格式及 ESP-IDF 构建。模拟执行不等于真机刷新。实际覆盖范围与尚未验证项目见 [实机记录](docs/validation-multi-app-hardware.md)。

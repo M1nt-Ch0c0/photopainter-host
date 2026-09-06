@@ -23,7 +23,7 @@ The host now loads an independent app ELF from A/B data slots. Read `docs-module
 - Resolve `espressif/elf_loader: ^1.3.3` from the Component Registry. Never fork, vendor, or patch it.
 - Do not base work on `aitjcize/esp32-photoframe` or a Waveshare complete firmware.
 - Do not add WebUI, album, whole-firmware OTA, Home Assistant, deep sleep, or an SD dependency for applications. The user-requested SD Wi-Fi boot source and first migration from NVS/wifi.txt are supported. Preserve valid JSON authority and atomic .tmp/.bak publication; never format the card. Independent per-app A/B updates are supported.
-- Keep image pushes on `POST /api/push` and authenticated module management on `/api/module`, both on port 80. Do not add public exposure or port mapping.
+- Keep image pushes on `POST /api/push` and authenticated module management on `/api/module`, and SD Wi-Fi configuration on `/api/wifi`, all on port 80. Do not add public exposure or port mapping.
 - Preserve status semantics: unconfigured token 503, missing or wrong token 401, over 5 MiB 413, invalid compatible image 4xx, and 200 only after physical refresh plus final POWER_OFF wait.
 - Reject every invalid request before display I/O.
 

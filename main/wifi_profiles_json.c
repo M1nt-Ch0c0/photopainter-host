@@ -85,13 +85,10 @@ esp_err_t wifi_profiles_read_file(const char *path, wifi_profiles_t *out)
     return e;
 }
 
-esp_err_t wifi_profiles_save_file(const char *path, const wifi_profiles_t *profiles)
+esp_err_t wifi_profiles_encode(const wifi_profiles_t *profiles, char **out)
 {
-    if (!path || !wifi_profiles_valid(profiles)) return ESP_ERR_INVALID_ARG;
-    char temporary[256], backup[256];
-    if (snprintf(temporary, sizeof(temporary), "%s.tmp", path) >= (int)sizeof(temporary) ||
-        snprintf(backup, sizeof(backup), "%s.bak", path) >= (int)sizeof(backup))
-        return ESP_ERR_INVALID_ARG;
+    if (!out || !wifi_profiles_valid(profiles)) return ESP_ERR_INVALID_ARG;
+    *out = NULL;
     cJSON *root = cJSON_CreateObject();
     if (!root) return ESP_ERR_NO_MEM;
     cJSON *networks = cJSON_AddArrayToObject(root, "networks");
@@ -106,6 +103,21 @@ esp_err_t wifi_profiles_save_file(const char *path, const wifi_profiles_t *profi
     char *text = ok ? cJSON_PrintUnformatted(root) : NULL;
     cJSON_Delete(root);
     if (!text) return ESP_ERR_NO_MEM;
+    *out = text;
+    return ESP_OK;
+}
+
+esp_err_t wifi_profiles_save_file(const char *path, const wifi_profiles_t *profiles)
+{
+    if (!path || !wifi_profiles_valid(profiles)) return ESP_ERR_INVALID_ARG;
+    char temporary[256], backup[256];
+    if (snprintf(temporary, sizeof(temporary), "%s.tmp", path) >= (int)sizeof(temporary) ||
+        snprintf(backup, sizeof(backup), "%s.bak", path) >= (int)sizeof(backup))
+        return ESP_ERR_INVALID_ARG;
+    char *text = NULL;
+    esp_err_t encoded = wifi_profiles_encode(profiles, &text);
+    if (encoded != ESP_OK) return encoded;
+    bool ok;
     FILE *file = fopen(temporary, "wb");
     if (!file) { free(text); return ESP_FAIL; }
     size_t size = strlen(text);

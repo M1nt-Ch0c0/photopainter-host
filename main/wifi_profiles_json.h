@@ -8,3 +8,5 @@ esp_err_t wifi_profiles_save_file(const char *path, const wifi_profiles_t *profi
 /* Existing JSON/bak is authoritative; only absence permits one-time migration. */
 esp_err_t wifi_profiles_migrate(const char *mount, const wifi_profiles_t *fallback,
                                wifi_profiles_t *out);
+/* Caller frees the encoded JSON; contains credentials. */
+esp_err_t wifi_profiles_encode(const wifi_profiles_t *profiles, char **out);

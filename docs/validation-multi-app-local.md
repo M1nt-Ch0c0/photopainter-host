@@ -4,7 +4,7 @@
 
 - 固定 ESP-IDF：`5e6f53cdb31fe5708eae3f55af9737be2822db22`，Registry elf_loader 1.3.3 保持不变。
 - `idf.py build` 通过；宿主独立构建，无 sibling ELF 编译依赖。
-- `PHOTOFRAME_TEST_ELF=../photoframe/build-app/photoframe.app.elf python3 -m unittest discover -s tools -p 'test_*.py'`：61 项全部通过、无跳过。
+- `PHOTOFRAME_TEST_ELF=../photoframe/build-app/photoframe.app.elf python3 -m unittest discover -s tools -p 'test_*.py'`：65 项全部通过、无跳过。
 - 三张总览 Mermaid 图解析通过；存储布局由 ESP-IDF 分区生成及尺寸检查验证。
 - 独立 color-test 应用有两份真实构建产物，入口/图案/错误传播的 3 项测试全部通过。
 
@@ -18,7 +18,7 @@ C SD JSON 解析、首次 NVS/wifi.txt 迁移、原子写回与 Python NVS 编�
 
 ## 实机验证范围
 
-下列原验收项中，多应用安装/更新/回退、重启恢复、原槽字节保持、无卡 NVS 兼容以及“不可达优先网络→可达备用网络”已有实机证据。SD 和两个真实网络的可控切换、物理断电中断及人工画面确认仍未完成。
+下列原验收项中，多应用安装/更新/回退、重启恢复、原槽字节保持、NVS 多组顺序尝试以及“不可达优先网络→可达备用网络”已有实机证据。SD 多组写入和两个真实网络的可控切换、物理断电中断及人工画面确认仍未完成。
 
 1. 插入 SD：原 JSON 格式按优先级连接两个可开关的真实 2.4 GHz 网络，断线重连、全部不可用后恢复、重启保留列表；无卡旧 NVS 兼容。
 2. 备份后部署新分区表/宿主，验证原 photoframe 的 A/B 和 NVS 导入。
@@ -30,3 +30,5 @@ C SD JSON 解析、首次 NVS/wifi.txt 迁移、原子写回与 Python NVS 编�
 
 - 固件：`ae86b590bcabc5c92c9cd8962a1179915862944946850efc985f0c8d9223d470`
 - 宿主 ELF：`502383bd166e36ee3c027ecb126b4258bbaa25ab12cc41e96252ba98ebc1a814`
+
+在线 Wi-Fi 工具新增测试：0600 私有备份、拒绝覆盖/符号链接、坏响应不发布且清除临时文件、上传前验证、真实本地 HTTP 请求方法和 Bearer 头、禁用代理/重定向、响应长度上限。
