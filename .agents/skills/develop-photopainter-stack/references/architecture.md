@@ -1,5 +1,7 @@
 # PhotoPainter stack architecture
 
+For the reader-facing Chinese overview, Mermaid diagrams, coupling boundaries and change-impact matrix, see the [stack architecture](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/ARCHITECTURE.md). This reference records the implementation contracts for development.
+
 ## Repository ownership
 
 | Repository | Owns | Does not own |

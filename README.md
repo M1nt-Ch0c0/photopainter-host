@@ -2,6 +2,8 @@
 
 > **AI / 开发者入口：**先阅读 [`AGENTS.md`](AGENTS.md)。空白电脑部署、三仓联调和真机诊断使用项目级 Skill：[`develop-photopainter-stack`](.agents/skills/develop-photopainter-stack/SKILL.md)。
 
+四个仓库的职责、架构图、耦合边界与修改影响，见 [PhotoPainter 架构总览](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/ARCHITECTURE.md)。
+
 ## 刷写
 
 本固件只适用于 7.3 英寸、800×480、N16R8 的 ESP32-S3 PhotoPainter。刷写前先把 16 MiB Flash 完整读出并校验 SHA-256；若机内有 microSD，也应关机取卡、用读卡器制作整卡镜像并校验。备份文件放在仓库之外。
