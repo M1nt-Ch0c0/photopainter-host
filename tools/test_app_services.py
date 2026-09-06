@@ -22,3 +22,6 @@ class RuntimeServiceTests(unittest.TestCase):
     def test_manager_serialization_coalescing_snapshot_and_input_lifetime(self):
         self.run_native("manager",["main/app_manager.c","main/app_button.c",
             "tests/runtime/test_manager.c","managed_components/espressif__cjson/cJSON/cJSON.c"])
+
+    def test_offline_and_bad_token_never_prevent_local_start(self):
+        self.run_native("boot",["main/app_main.c","tests/runtime/test_boot_order.c"])

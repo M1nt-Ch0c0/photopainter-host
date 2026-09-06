@@ -77,6 +77,8 @@ python3 tools/provision.py --config secrets.env --wifi-json /private/path/wifi.j
 
 ## 加载与恢复
 
+ABI 2 的生命周期、功能键及独立启动保护日志见 [运行层指南](docs-runtime-v2.md)。以下目录和分区规则继续适用。
+
 ```mermaid
 flowchart TB
     Admin["管理工具：应用 ID + ELF 包"] --> Host["宿主：鉴权、校验、全局操作锁"]
@@ -87,27 +89,28 @@ flowchart TB
     P --> Loader["只加载一个 ELF；切换前释放原 ELF"]
     C --> Loader
     W --> Loader
-    Loader --> ABI["固定 ABI 1：输入 PNG、调用、结果回调"]
-    ABI --> Screen["真实刷新 + 最终关断完成"]
+    Loader --> ABI["ABI 1 PNG / ABI 2 START 事件"]
+    ABI --> Screen["ABI 2 就绪及所需首屏 / ABI 1 首次推图"]
     Screen --> Confirm["确认应用选择和该应用版本"]
 ```
 
 - **stage/install**：写目标应用备用槽。先持久化目录分配及旧 fallback 失效，再擦除/写 payload、读回校验，最后写头部并登记 pending。活动槽和其他应用的字节不受影响。
-- **activate**：试运行指定应用的 pending 版本，可同时从原应用切换到新应用。先持久化全局 trial 再加载，刷新成功后才确认。
-- **switch**：试运行指定应用已经确认的 active 版本，不消费它尚未激活的 pending 更新。成功刷新后保存选中应用。
+- **activate**：试运行指定应用的 pending 版本，可同时从原应用切换到新应用。先持久化全局 trial 再加载，ABI 2 START 满足就绪和首屏条件后确认，ABI 1 仍等首次成功推图。
+- **switch**：试运行指定应用已经确认的 active 版本，不消费它尚未激活的 pending 更新。满足该 ABI 的就绪条件后保存选中应用。
 - **失败或确认前重启**：放弃试运行版本，恢复之前选中的已确认应用。普通切换失败不会改变目标应用自己的 A/B 版本；版本试运行失败会清除该候选。
 - **rollback**：取消候选，或交换指定应用的 active/previous。可回退未运行应用而不切换当前应用。首次安装尚未确认时没有该应用自己的 fallback，恢复的是原应用。
 - **remove**：只允许移除非当前且无全局试运行时的应用。先从目录移除，释放 bank；旧字节在后续分配时擦除，不会自动加载。不是安全擦除操作。
 
-未确认的全局试运行期间，拒绝其他安装、切换或删除，必须先完成一次成功刷新或回退。PNG 校验拒绝不确认、不切换；驱动失败或缺失结果回调触发恢复。候选确认日志写入失败时保留 trial，下一次重启仍回退；推图 200 只证明物理刷新成功，确认状态应读取管理接口。
+未确认的全局试运行期间，拒绝其他安装、切换或删除，必须先完成该 ABI 的启动确认或回退。PNG 校验拒绝不确认、不切换；驱动失败或缺失结果回调触发恢复。候选确认日志写入失败时保留 trial，下一次重启仍回退；推图 200 只证明物理刷新成功，确认状态应读取管理接口。
 
-所有应用仍是受信任的原生 ELF，共享内存与硬件；不是进程或沙箱。应用应在调用返回前释放自己持有的任务/驱动资源。多个应用的代码可各自构建，但必须符合相同固定 ABI；不支持在后台同时常驻多个应用。
+所有应用仍是受信任的原生 ELF，共享内存与硬件；不是进程或沙箱。ABI 2 禁止自建任务/回调，STOP 后卸载；ABI 1 仍须在调用返回前释放资源。多个应用的代码可各自构建，但必须声明宿主支持的 ABI；不支持在后台同时常驻多个应用。
 
 ## 包与命令
 
-新包 format 2 保留原 52 字节头，并在偏移 52 添加 32 字节 NUL 结尾应用 ID。其余部分填充到 4096 字节后跟 ELF。原 ELF ABI 1、长度、版本和 payload SHA-256 不变；包头 ID 必须与管理请求目标一致。format 1 的旧包只能用于 `photoframe`。SHA-256 用于完整性检测，不是签名认证；上传权限仍由设备 Bearer 令牌控制。
+新包 format 2 保留原 52 字节头，并在偏移 52 添加 32 字节 NUL 结尾应用 ID。其余部分填充到 4096 字节后跟 ELF。长度、版本和 payload SHA-256 布局不变；format 2 同时接受 ABI 1/2，ABI 2 另检查只读 manifest 和导入集合；包头 ID 必须与管理请求目标一致。format 1 的旧包只能用于 `photoframe`。SHA-256 用于完整性检测，不是签名认证；上传权限仍由设备 Bearer 令牌控制。
 
 ```bash
+# 以下 clock 推图步骤演示 ABI 1 兼容应用。ABI 2 color-test 在 activate/switch 时自主显示，不要再推触发图。
 # 两个应用分别构建 ELF；以下路径用各自真实构建产物替换。
 # 可直接使用 photoframe 仓库 examples/color-test 的独立第二应用。
 python3 tools/module.py package --app clock --version 1 --input /path/to/clock.app.elf --output /tmp/clock-v1.pkg

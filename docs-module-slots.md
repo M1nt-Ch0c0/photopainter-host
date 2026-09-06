@@ -1,6 +1,6 @@
 # Independent ELF modules
 
-> 当前宿主已扩展为 5 应用独立 A/B；Wi-Fi、应用 ID、迁移和管理命令以 [新指南](docs-multi-apps.md) 为准。本文保留旧单应用包和首次种子部署的说明。
+> 当前宿主已扩展为 5 应用独立 A/B；Wi-Fi、应用 ID、迁移和管理命令以 [新指南](docs-multi-apps.md) 为准。本文保留 ABI 1 单应用包和首次种子部署的历史说明；当前 ABI 2 自主首屏与功能键行为以 [运行层指南](docs-runtime-v2.md) 为准。
 
 The host firmware builds without a sibling checkout and contains no business ELF.
 `main/host_abi.c` owns ABI version 1's fixed host exports; an independent module is
@@ -84,7 +84,7 @@ updates; adding an import requires a compatible host ABI change.
 
 ```sh
 # From photoframe, in the pinned IDF environment:
-idf.py -B build-app -DIDF_TARGET=esp32s3 -DPHOTOFRAME_ARTIFACT=app build
+idf.py -B build-app -DIDF_TARGET=esp32s3 -DPHOTOFRAME_ARTIFACT=app -DPHOTOFRAME_ABI=1 build
 
 # From photopainter-host:
 python3 tools/module.py package --input ../photoframe/build-app/photoframe.app.elf \

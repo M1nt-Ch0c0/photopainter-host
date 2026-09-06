@@ -12,7 +12,7 @@ This is the canonical entry point for AI-assisted work on the three-repository P
 
 ## Repository role
 
-This repository owns the ESP32-S3 host: NVS configuration, Wi-Fi, `POST /api/push`, Bearer authentication, request buffering, ELF relocation, and host bridge symbols. Display decoding and E6 timing belong to the sibling `photoframe` repository. Quota collection and PNG rendering belong to `ai-quota-frame`.
+This repository owns the ESP32-S3 host: NVS configuration, Wi-Fi, `POST /api/push`, Bearer authentication, request buffering, ELF relocation, and host bridge symbols. PNG decoding and first-screen policy belong to sibling `photoframe`; ABI 2 E6/power timing belongs to this host's `photopainter_board` component. ABI 1 keeps its legacy driver. Quota collection and PNG rendering belong to `ai-quota-frame`.
 
 The host now loads an independent app ELF from A/B data slots. Read `docs-module-slots.md` for package, activation, confirmation and rollback. The explicit user-requested module update architecture supersedes the former embedded-only/no-module-update design.
 
@@ -28,6 +28,8 @@ The host now loads an independent app ELF from A/B data slots. Read `docs-module
 - Reject every invalid request before display I/O.
 
 Read `docs-multi-apps.md` for the five-bank application catalog, format-2 identity, switch trials, legacy migration, and SD/NVS Wi-Fi priority.
+
+Read `docs-runtime-v2.md` for ABI 2, cooperative events, host services, GPIO 4 switching and bounded boot recovery. Preserve ABI 1 and the existing five-bank layout.
 
 ## Build and test
 
