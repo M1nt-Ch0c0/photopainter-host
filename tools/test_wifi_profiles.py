@@ -19,7 +19,7 @@ class Profiles(ctypes.Structure):
 
 
 class HostConfig(ctypes.Structure):
-    _fields_ = [("wifi", Profiles), ("token", ctypes.c_char * 129)]
+    _fields_ = [("wifi", Profiles), ("token", ctypes.c_char * 129), ("token_status",ctypes.c_int)]
 
 
 class WiFiTests(unittest.TestCase):
@@ -173,7 +173,12 @@ class WiFiTests(unittest.TestCase):
                 self.assertEqual(config.wifi.count,count)
                 if count:self.assertEqual(config.wifi.items[0].ssid,ssid)
                 self.assertEqual(bool(config.token),mode not in (0,9))
-        for mode in (4,7,8,11,12):
+        self.lib.mock_config_mode(8);config=HostConfig()
+        self.assertEqual(self.lib.photopainter_host_config_load(ctypes.byref(config)),0)
+        self.assertEqual(config.wifi.count,1)
+        self.assertFalse(config.token)
+        self.assertNotEqual(config.token_status,0)
+        for mode in (4,7,11,12):
             with self.subTest(error_mode=mode):
                 self.lib.mock_config_mode(mode)
                 self.assertNotEqual(self.lib.photopainter_host_config_load(ctypes.byref(HostConfig())),0)

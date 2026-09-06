@@ -5,6 +5,11 @@ idf_component_register(
         "photoframe_plugin.c"
         "module_slots.c"
         "module_format.c"
+        "app_manifest.c"
+        "app_services.c"
+        "app_manager.c"
+        "app_button.c"
+        "app_boot.c"
         "host_abi.c"
         "push_server.c"
         "wifi_station.c"
@@ -13,6 +18,7 @@ idf_component_register(
         "wifi_sd.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
+        photopainter_board
         esp_event
         esp_http_server
         esp_netif

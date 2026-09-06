@@ -41,6 +41,8 @@ class SlotTests(unittest.TestCase):
             str(ROOT / "tests/slots/mock.c"),
             str(ROOT / "main/module_slots.c"),
             str(ROOT / "main/module_format.c"),
+            str(ROOT / "main/app_manifest.c"),
+            str(ROOT / "main/app_boot.c"),
             str(ROOT / "main/photoframe_plugin.c"),
             str(ROOT / "tests/slots/plugin_mock.c"),
             "-lcrypto",
@@ -65,6 +67,7 @@ class SlotTests(unittest.TestCase):
         cls.temp.cleanup()
 
     def setUp(self):
+        self.lib.mock_v2(0,1,0)
         self.lib.mock_reset()
         self.assertEqual(self.lib.module_slots_init(), 0)
 
@@ -271,6 +274,94 @@ class SlotTests(unittest.TestCase):
         self.assertNotEqual(self.lib.photoframe_plugin_select(b"clock", True), 0)
         self.assertEqual(self.lib.photoframe_plugin_app(), 0)
         self.assertEqual(self.lib.mock_plugin_live(), 1)
+
+    def v2_seed(self, app="photoframe", flags=0):
+        p=package_elf(minimal_elf(app,flags),11,app)
+        self.lib.mock_seed(p,len(p))
+
+    def test_v2_start_confirms_without_png_and_stops_before_next_start(self):
+        self.v2_seed()
+        self.assertEqual(self.lib.photoframe_plugin_init(),0)
+        p=package_elf(minimal_elf("color-test",1),12,"color-test")
+        self.assertEqual(self.lib.app_catalog_stage(b"color-test",p,len(p)),0)
+        self.lib.mock_v2(0,1,0)
+        self.assertEqual(self.lib.photoframe_plugin_select(b"color-test",True),0)
+        self.assertEqual([self.lib.mock_trace(i) for i in range(2)],[5,1])
+        self.assertEqual(self.catalog().selected,1)
+        self.assertEqual(self.catalog().trial_app,-1)
+        self.assertEqual(self.lib.mock_plugin_live(),1)
+        self.assertEqual(self.lib.mock_plugin_peak(),1)
+
+    def test_v2_missing_duplicate_wrong_generation_and_not_ready_fail_boot(self):
+        for mode in range(1,5):
+            with self.subTest(mode=mode):
+                self.lib.app_runtime_shutdown();self.setUp();self.v2_seed()
+                self.lib.mock_v2(mode,1,0)
+                self.assertNotEqual(self.lib.photoframe_plugin_init(),0)
+                self.assertFalse(self.lib.photoframe_plugin_is_ready())
+
+    def test_v2_display_receipt_required_and_bad_start_restores_legacy(self):
+        self.init_plugin()
+        p=package_elf(minimal_elf("color-test",1),12,"color-test")
+        self.assertEqual(self.lib.app_catalog_stage(b"color-test",p,len(p)),0)
+        self.lib.mock_v2(0,0,0)
+        self.assertNotEqual(self.lib.photoframe_plugin_select(b"color-test",True),0)
+        self.assertEqual(self.lib.photoframe_plugin_app(),0)
+        self.assertEqual(self.catalog().trial_app,-1)
+
+    def test_v2_disallowed_import_and_manifest_id_rejected_before_mutation(self):
+        # Packaging rejects it independently; forge envelope to exercise firmware.
+        from hashlib import sha256
+        import struct
+        for elf in (minimal_elf("other"),minimal_elf("clock",imports="xTaskCreate")):
+            p=bytearray(package_elf(minimal_elf(),1,"clock"))
+            struct.pack_into("<II",p,8,2,len(elf));p[20:52]=sha256(elf).digest()
+            p=bytes(p[:4096])+elf
+            self.assertNotEqual(self.lib.app_catalog_stage(b"clock",p,len(p)),0)
+            self.assertEqual(self.lib.app_catalog_find(b"clock"),-1)
+
+    def boot_baseline(self):
+        self.lib.mock_legacy(0,1,-1,0)
+        self.assertEqual(self.lib.module_slots_init(),0)
+
+    def test_boot_active_interruption_fallback_interruption_stays_fault(self):
+        self.boot_baseline()
+        self.assertEqual(self.lib.app_boot_prepare(),0)  # active START intent
+        self.assertEqual(self.lib.module_slots_init(),0) # reset
+        self.assertEqual(self.lib.app_boot_prepare(),0)  # fallback START intent
+        self.assertEqual(self.state(),(1,-1,-1,0))
+        for _ in range(3):
+            self.assertEqual(self.lib.module_slots_init(),0)
+            self.assertNotEqual(self.lib.app_boot_prepare(),0)
+            self.assertEqual(self.state(),(1,-1,-1,0))
+
+    def test_boot_commit_failure_never_enters_unprotected_call(self):
+        self.boot_baseline();self.lib.mock_fail_commit(1)
+        self.assertNotEqual(self.lib.app_boot_prepare(),0)
+        self.assertEqual(self.lib.module_slots_init(),0)
+        self.assertEqual(self.lib.app_boot_prepare(),0)
+
+    def test_boot_fallback_intent_survives_each_commit_boundary(self):
+        for commit in (1,2,3):
+            with self.subTest(commit=commit):
+                self.setUp();self.boot_baseline()
+                self.assertEqual(self.lib.app_boot_prepare(),0)
+                self.lib.mock_fail_commit(commit)
+                self.assertNotEqual(self.lib.app_boot_fallback(),0)
+                self.assertEqual(self.lib.module_slots_init(),0)
+                self.assertEqual(self.lib.app_boot_prepare(),0)
+                self.assertEqual(self.state(),(1,-1,-1,0))
+                self.assertEqual(self.lib.app_boot_complete(),0)
+                self.assertEqual(self.lib.module_slots_init(),0)
+                self.assertEqual(self.lib.app_boot_prepare(),0)
+
+    def test_boot_guard_and_cancelled_switch_trial_keep_original_identity(self):
+        self.boot_baseline()
+        self.assertEqual(self.stage_app("clock"),0)
+        self.assertEqual(self.lib.app_catalog_begin(1,True),0)
+        self.assertEqual(self.lib.module_slots_init(),0)
+        self.assertEqual(self.catalog().selected,0)
+        self.assertEqual(self.lib.app_boot_prepare(),0)
 
 
 if __name__ == "__main__":

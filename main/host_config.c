@@ -55,13 +55,15 @@ esp_err_t photopainter_host_config_load(photopainter_host_config_t *config)
     esp_err_t network_error = ESP_ERR_NOT_FOUND;
     nvs_handle_t handle;
     esp_err_t err = nvs_open("photo", NVS_READONLY, &handle);
-    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) return err;
+    if(err!=ESP_OK&&err!=ESP_ERR_NVS_NOT_FOUND) {
+        config->token_status=err;network_error=err;
+    }
     if (err == ESP_OK) {
         err = read_optional_string(handle, "push_token", config->push_token,
                                    sizeof(config->push_token));
-        if (err == ESP_OK) network_error = read_networks(handle, &fallback);
+        config->token_status = err;
+        network_error = read_networks(handle, &fallback);
         nvs_close(handle);
-        if (err != ESP_OK) return err;
     }
     /* Existing SD JSON remains authoritative, including empty lists. Migration
      * uses valid NVS first, otherwise wifi.txt; damaged NVS does not trigger it. */

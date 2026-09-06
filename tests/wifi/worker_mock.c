@@ -72,3 +72,5 @@ int main(int argc, char **argv)
     puts("");
     return 0;
 }
+
+void app_manager_network_changed(bool connected){(void)connected;}

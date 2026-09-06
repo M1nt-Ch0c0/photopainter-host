@@ -49,6 +49,14 @@ extern int __gedf2;
 extern int gpio_get_level;
 extern int i2c_master_transmit_receive;
 extern int free;
+extern int app_host_context_v2;
+extern int app_host_complete_v2;
+extern int app_host_display_v2;
+extern int app_host_cache_put_v2;
+extern int app_host_cache_get_v2;
+extern int app_host_timer_v2;
+extern int app_host_monotonic_ms_v2;
+extern int app_host_wall_time_v2;
 #pragma GCC diagnostic pop
 esp_elf_symbol_table_t g_esp_photoframe_elfsyms[] = {
     ESP_ELFSYM_EXPORT(longjmp),
@@ -98,4 +106,12 @@ esp_elf_symbol_table_t g_esp_photoframe_elfsyms[] = {
     ESP_ELFSYM_EXPORT(gpio_get_level),
     ESP_ELFSYM_EXPORT(i2c_master_transmit_receive),
     ESP_ELFSYM_EXPORT(free),
+    ESP_ELFSYM_EXPORT(app_host_context_v2),
+    ESP_ELFSYM_EXPORT(app_host_complete_v2),
+    ESP_ELFSYM_EXPORT(app_host_display_v2),
+    ESP_ELFSYM_EXPORT(app_host_cache_put_v2),
+    ESP_ELFSYM_EXPORT(app_host_cache_get_v2),
+    ESP_ELFSYM_EXPORT(app_host_timer_v2),
+    ESP_ELFSYM_EXPORT(app_host_monotonic_ms_v2),
+    ESP_ELFSYM_EXPORT(app_host_wall_time_v2),
     ESP_ELFSYM_END};

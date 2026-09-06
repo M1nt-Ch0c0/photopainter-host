@@ -1,4 +1,5 @@
 #include "app_catalog.h"
+#include "app_manifest.h"
 #include "esp_heap_caps.h"
 #include "esp_partition.h"
 #include "nvs.h"
@@ -122,15 +123,17 @@ static const esp_partition_t *location(int app, int slot, size_t *offset)
 }
 static bool valid_header(const module_header_t *h)
 {
-    return h->magic == MODULE_MAGIC && (h->format == 1 || h->format == 2) && h->abi == MODULE_ABI &&
+    return h->magic == MODULE_MAGIC && (h->format == 1 || h->format == 2) && (h->abi == 1 || (h->format == 2 && h->abi == 2)) &&
            h->length >= 52 && h->length <= MODULE_MAX_BYTES;
 }
 static bool valid_identity(const module_header_t *h, const char id[APP_ID_BYTES], const char *expected)
 {
     return h->format == 1 ? !strcmp(expected, "photoframe") : app_id_valid(id) && !strcmp(id, expected);
 }
-static bool valid_data(const module_header_t *h, const uint8_t *p)
+static bool valid_data(const module_header_t *h, const uint8_t *p, const char *id)
 {
+    app_manifest_v2_t manifest;
+    if (h->abi == 2 && (!app_manifest_read(p,h->length,&manifest) || strcmp(id,manifest.id))) return false;
     uint8_t hash[32];
     if (!module_elf_valid(p, h->length)) return false;
     esp_sha(SHA2_256, p, h->length, hash);
@@ -153,7 +156,7 @@ esp_err_t app_catalog_read(int app, int slot, uint8_t **data, module_header_t *h
     uint8_t *payload = heap_caps_malloc(h->length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!payload) return ESP_ERR_NO_MEM;
     e = esp_partition_read(p, offset + MODULE_HEADER_BYTES, payload, h->length);
-    if (e == ESP_OK && !valid_data(h, payload)) e = ESP_ERR_INVALID_CRC;
+    if (e == ESP_OK && !valid_data(h, payload, catalog.apps[app].id)) e = ESP_ERR_INVALID_CRC;
     if (e != ESP_OK) free(payload); else *data = payload;
     return e;
 }
@@ -167,7 +170,7 @@ esp_err_t app_catalog_stage(const char *id, const uint8_t *package, size_t size)
     module_header_t h;
     memcpy(&h, package, sizeof(h));
     if (!valid_header(&h) || size != MODULE_HEADER_BYTES + h.length ||
-        !valid_identity(&h, (const char *)package + sizeof(h), id) || !valid_data(&h, package + MODULE_HEADER_BYTES)) return ESP_ERR_INVALID_ARG;
+        !valid_identity(&h, (const char *)package + sizeof(h), id) || !valid_data(&h, package + MODULE_HEADER_BYTES, id)) return ESP_ERR_INVALID_ARG;
     int app = app_catalog_find(id);
     app_catalog_t next = catalog;
     if (app < 0) {
@@ -190,7 +193,7 @@ esp_err_t app_catalog_stage(const char *id, const uint8_t *package, size_t size)
     uint8_t *verify = heap_caps_malloc(h.length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!verify) return ESP_ERR_NO_MEM;
     if (e == ESP_OK) e = esp_partition_read(p, offset + MODULE_HEADER_BYTES, verify, h.length);
-    if (e == ESP_OK && !valid_data(&h, verify)) e = ESP_ERR_INVALID_CRC;
+    if (e == ESP_OK && !valid_data(&h, verify, id)) e = ESP_ERR_INVALID_CRC;
     free(verify);
     /* Header (including identity) is the last flash write; only journal exposes it. */
     if (e == ESP_OK) e = esp_partition_write(p, offset, package, sizeof(h) + APP_ID_BYTES);

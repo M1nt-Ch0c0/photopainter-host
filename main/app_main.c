@@ -4,7 +4,7 @@
 #include "esp_log.h"
 #include "host_config.h"
 #include "nvs_flash.h"
-#include "photoframe_plugin.h"
+#include "app_manager.h"
 #include "push_server.h"
 #include "wifi_station.h"
 
@@ -22,40 +22,21 @@ void app_main(void)
     esp_err_t err = nvs_flash_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "NVS initialization failed: %s", esp_err_to_name(err));
-        return;
     }
 
+    /* Local applications boot independently of Wi-Fi and incoming HTTP. */
+    err = app_manager_start();
+    if (err != ESP_OK) ESP_LOGE(TAG,"application manager unavailable: %s",esp_err_to_name(err));
     photopainter_host_config_t config;
     err = photopainter_host_config_load(&config);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "configuration load failed: %s", esp_err_to_name(err));
-        clear_config(&config);
-        return;
+        ESP_LOGE(TAG,"network configuration unavailable; local applications remain active");
+        clear_config(&config);return;
     }
-    if (config.wifi.count == 0) {
-        ESP_LOGE(TAG, "Wi-Fi is not provisioned");
-        clear_config(&config);
-        return;
-    }
-
-    err = photoframe_plugin_init();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "photoframe payload unavailable: %s",
-                 esp_err_to_name(err));
-        /* Keep starting the server: authenticated pushes will fail safely and
-         * never touch the panel. */
-    }
-
-    err = photopainter_wifi_connect(&config.wifi);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Wi-Fi startup failed: %s", esp_err_to_name(err));
-        clear_config(&config);
-        return;
-    }
-    err = photopainter_push_server_start(config.push_token);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "push server startup failed: %s", esp_err_to_name(err));
-    }
-
+    if (config.wifi.count) {
+        err=photopainter_wifi_connect(&config.wifi);
+        if(err==ESP_OK)err=photopainter_push_server_start(config.push_token);
+        if(err!=ESP_OK)ESP_LOGE(TAG,"network service unavailable: %s",esp_err_to_name(err));
+    } else ESP_LOGW(TAG,"no Wi-Fi profiles; local applications remain active");
     clear_config(&config);
 }

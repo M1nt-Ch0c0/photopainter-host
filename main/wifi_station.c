@@ -1,4 +1,6 @@
 #include "wifi_station.h"
+/* Optional observer; the Wi-Fi worker remains independently testable. */
+extern void app_manager_network_changed(bool connected) __attribute__((weak));
 #include <string.h>
 #include "esp_check.h"
 #include "esp_event.h"
@@ -24,12 +26,14 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_STOP)
         xEventGroupSetBits(events, STOPPED);
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        if(app_manager_network_changed)app_manager_network_changed(false);
         xEventGroupClearBits(events, CONNECTED);
         xEventGroupSetBits(events, DISCONNECTED);
     }
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *event = data;
         ESP_LOGI(TAG, "IPv4: " IPSTR, IP2STR(&event->ip_info.ip));
+        if(app_manager_network_changed)app_manager_network_changed(true);
         xEventGroupSetBits(events, CONNECTED);
     }
 }

@@ -5,13 +5,15 @@
 #include <string.h>
 static unsigned char flash[3][8 * MODULE_SLOT_BYTES];
 static app_catalog_t persisted, staged;
+static unsigned char boot[56],boot_staged[56];
+static int boot_exists,boot_dirty,catalog_dirty;
 static int exists, fail_write, fail_commit, legacy_exists;
 static module_state_t legacy_state;
 static esp_partition_t parts[] = {{MODULE_SLOT_BYTES, 0}, {MODULE_SLOT_BYTES, 1}, {8 * MODULE_SLOT_BYTES, 2}};
 void mock_reset(void)
 {
     memset(flash, 255, sizeof(flash));
-    exists = legacy_exists = 0;
+    exists = legacy_exists = boot_exists = boot_dirty = catalog_dirty = 0;
     fail_write = 0;
     fail_commit = 0;
 }
@@ -57,13 +59,18 @@ esp_err_t nvs_open_from_partition(const char *p, const char *s, int m, nvs_handl
     (void)p;
     (void)s;
     (void)m;
-    *h = 1;
+    *h = !strcmp(s,"runtime")?2:1;
     return 0;
 }
 esp_err_t nvs_get_blob(nvs_handle_t h, const char *k, void *d, size_t *n)
 {
     (void)h;
     (void)k;
+    if(h==2&&!strcmp(k,"runtime_boot")) {
+        if(!boot_exists)return ESP_ERR_NVS_NOT_FOUND;
+        if(*n<sizeof(boot))return ESP_ERR_INVALID_SIZE;
+        memcpy(d,boot,sizeof(boot));*n=sizeof(boot);return 0;
+    }
     if (!strcmp(k, "state") && legacy_exists) {
         if (*n < sizeof(legacy_state)) return ESP_ERR_INVALID_SIZE;
         memcpy(d, &legacy_state, sizeof(legacy_state)); *n = sizeof(legacy_state); return 0;
@@ -79,6 +86,11 @@ esp_err_t nvs_set_blob(nvs_handle_t h, const char *k, const void *d, size_t n)
 {
     (void)h;
     (void)k;
+    if(h==2&&!strcmp(k,"runtime_boot")) {
+        if(n!=sizeof(boot))return ESP_FAIL;
+        memcpy(boot_staged,d,n);boot_dirty=1;return 0;
+    }
+    catalog_dirty=1;
     if (n != sizeof(staged))
         return ESP_FAIL;
     memcpy(&staged, d, n);
@@ -89,8 +101,9 @@ esp_err_t nvs_commit(nvs_handle_t h)
     (void)h;
     if (fail_commit > 0 && --fail_commit == 0)
         return ESP_FAIL;
-    persisted = staged;
-    exists = 1;
+    if(h==2) {
+        if(boot_dirty){memcpy(boot,boot_staged,sizeof(boot));boot_exists=1;boot_dirty=0;}
+    } else if(catalog_dirty){persisted=staged;exists=1;catalog_dirty=0;}
     return 0;
 }
 void esp_sha(int t, const unsigned char *p, size_t n, unsigned char *d)

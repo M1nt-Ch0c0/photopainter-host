@@ -1,6 +1,8 @@
 #include "push_server.h"
 
 #include "app_catalog.h"
+#include "app_manager.h"
+#include "app_runtime.h"
 #include "wifi_sd.h"
 #include "wifi_profiles_json.h"
 #include <stdbool.h>
@@ -29,7 +31,7 @@
 static const char *TAG = "push";
 static char s_push_token[PUSH_TOKEN_MAX + 1];
 static size_t s_push_token_length;
-static SemaphoreHandle_t s_display_lock;
+static bool s_server_started;
 
 static esp_err_t send_text(httpd_req_t *request, const char *status,
                            const char *message)
@@ -168,14 +170,11 @@ static esp_err_t push_handler(httpd_req_t *request)
         return send_text(request, "415 Unsupported Media Type",
                          "Content-Type must be image/png\n");
     }
-    if (!photoframe_plugin_is_ready())
-    {
-        return send_text(request, "503 Service Unavailable",
-                         "photoframe payload is unavailable\n");
-    }
-    if (xSemaphoreTake(s_display_lock, 0) != pdTRUE)
-    {
-        return send_text(request, "409 Conflict", "display is busy\n");
+    if (!app_manager_acquire())
+        return send_text(request,"409 Conflict","display is busy\n");
+    if (!photoframe_plugin_is_ready()) {
+        app_manager_release();
+        return send_text(request,"503 Service Unavailable","application unavailable\n");
     }
 
     size_t app_length = httpd_req_get_hdr_value_len(request, "X-PhotoPainter-App");
@@ -187,16 +186,20 @@ static esp_err_t push_handler(httpd_req_t *request)
         if (app_length >= sizeof(expected) ||
             (app_length && httpd_req_get_hdr_value_str(request, "X-PhotoPainter-App", expected, sizeof(expected)) != ESP_OK) ||
             !app_id_valid(expected) || !c || running < 0 || strcmp(expected, c->apps[running].id)) {
-            xSemaphoreGive(s_display_lock);
+            app_manager_release();
             return send_text(request, "409 Conflict", "requested application is not running\n");
         }
     }
 
+    if (!app_runtime_accepts_png()) {
+        app_manager_release();
+        return send_text(request, "415 Unsupported Media Type", "application does not accept PNG\n");
+    }
     size_t size = (size_t)request->content_len;
     uint8_t *png = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (png == NULL)
     {
-        xSemaphoreGive(s_display_lock);
+        app_manager_release();
         return send_text(request, "503 Service Unavailable",
                          "insufficient image memory\n");
     }
@@ -212,7 +215,7 @@ static esp_err_t push_handler(httpd_req_t *request)
     }
     else
     {
-        int result = photoframe_plugin_render(png, size);
+        int result = app_manager_render(png, size);
         switch (result)
         {
         case PHOTOFRAME_RESULT_OK:
@@ -246,140 +249,59 @@ static esp_err_t push_handler(httpd_req_t *request)
     }
 
     heap_caps_free(png);
-    xSemaphoreGive(s_display_lock);
+    app_manager_release();
     return response;
 }
 
 static esp_err_t module_handler(httpd_req_t *request)
 {
-    if (!s_push_token_length)
-        return send_text(request, "503 Service Unavailable", "token not configured\n");
-    if (!request_is_authorized(request))
-        return send_text(request, "401 Unauthorized", "unauthorized\n");
-    if (xSemaphoreTake(s_display_lock, 0) != pdTRUE)
-        return send_text(request, "409 Conflict", "busy\n");
+    if (!s_push_token_length)return send_text(request,"503 Service Unavailable","token not configured\n");
+    if (!request_is_authorized(request))return send_text(request,"401 Unauthorized","unauthorized\n");
+    char query[128]={0},op[20]={0},app[APP_ID_BYTES]="photoframe";
+    size_t n=httpd_req_get_url_query_len(request);
+    if(n>=sizeof(query)||(n&&httpd_req_get_url_query_str(request,query,sizeof(query))!=ESP_OK))
+        return send_text(request,"400 Bad Request","invalid query\n");
+    if(n) {
+        char value[APP_ID_BYTES]={0};esp_err_t e=httpd_query_key_value(query,"app",value,sizeof(value));
+        if(e==ESP_OK)memcpy(app,value,sizeof(app));else if(e!=ESP_ERR_NOT_FOUND)app[0]=0;
+        e=httpd_query_key_value(query,"op",op,sizeof(op));if(e!=ESP_OK&&e!=ESP_ERR_NOT_FOUND)app[0]=0;
+    }
+    if(!app_id_valid(app))return send_text(request,"400 Bad Request","invalid app id\n");
+    if(request->method==HTTP_GET) {
+        char json[4096];app_manager_status(json,sizeof(json));
+        httpd_resp_set_type(request,"application/json");httpd_resp_set_hdr(request,"Cache-Control","no-store");
+        return httpd_resp_sendstr(request,json);
+    }
+    if(!app_manager_acquire())return send_text(request,"409 Conflict","busy\n");
     esp_err_t response;
-    char query[128] = {0}, op[20] = {0}, app[APP_ID_BYTES] = "photoframe";
-    size_t query_len = httpd_req_get_url_query_len(request);
-    if (query_len >= sizeof(query) || (query_len && httpd_req_get_url_query_str(request, query, sizeof(query)) != ESP_OK)) {
-        xSemaphoreGive(s_display_lock);
-        return send_text(request, "400 Bad Request", "invalid query\n");
-    }
-    if (query_len) {
-        char value[APP_ID_BYTES] = {0};
-        esp_err_t e = httpd_query_key_value(query, "app", value, sizeof(value));
-        if (e == ESP_OK) memcpy(app, value, sizeof(app));
-        else if (e != ESP_ERR_NOT_FOUND) app[0] = 0;
-        e = httpd_query_key_value(query, "op", op, sizeof(op));
-        if (e != ESP_OK && e != ESP_ERR_NOT_FOUND) app[0] = 0;
-    }
-    if (!app_id_valid(app)) {
-        xSemaphoreGive(s_display_lock);
-        return send_text(request, "400 Bad Request", "invalid app id\n");
-    }
-    if (request->method == HTTP_GET)
-    {
-        module_state_t state = module_slots_state();
-        const app_catalog_t *c = app_catalog_get();
-        char json[4096];
-        int used = snprintf(json, sizeof(json),
-                 "{\"abi\":1,\"active\":%ld,\"previous\":%ld,\"pending\":%ld,\"trial\":"
-                 "%ld,\"loaded\":%d,\"version\":%lu,\"ready\":%s,\"selected\":%d,\"trial_app\":%d,\"loaded_app\":%d,\"capacity\":%d,\"apps\":[",
-                 (long)state.active, (long)state.previous, (long)state.pending,
-                 (long)state.trial, photoframe_plugin_slot(),
-                 (unsigned long)photoframe_plugin_version(),
-                 photoframe_plugin_is_ready() ? "true" : "false",
-                 c ? (int)c->selected : -1, c ? (int)c->trial_app : -1,
-                 photoframe_plugin_app(), APP_LIMIT);
-        bool comma = false;
-        for (int i = 0; c && i < APP_LIMIT; ++i) {
-            const app_entry_t *a = &c->apps[i];
-            if (!a->id[0]) continue;
-            char versions[2][16];
-            for (int slot = 0; slot < 2; ++slot) {
-                uint8_t *data = NULL;
-                module_header_t h;
-                if (app_catalog_read(i, slot, &data, &h) == ESP_OK)
-                    snprintf(versions[slot], sizeof(versions[slot]), "%lu", (unsigned long)h.version);
-                else strcpy(versions[slot], "null");
-                free(data);
-            }
-            used += snprintf(json + used, sizeof(json) - used,
-                "%s{\"id\":\"%s\",\"bank\":%d,\"slot_bytes\":%u,\"active\":%ld,\"previous\":%ld,\"pending\":%ld,\"trial\":%ld,\"versions\":[%s,%s]}",
-                comma ? "," : "", a->id, i, MODULE_SLOT_BYTES,
-                (long)a->slots.active, (long)a->slots.previous, (long)a->slots.pending, (long)a->slots.trial,
-                versions[0], versions[1]);
-            comma = true;
+    if(!strcmp(op,"activate")||!strcmp(op,"switch")||!strcmp(op,"rollback")||!strcmp(op,"remove")) {
+        esp_err_t e=ESP_ERR_INVALID_ARG;
+        if(!request->content_len) {
+            if(!strcmp(op,"remove"))e=app_manager_remove(app);
+            else if(!strcmp(op,"rollback"))e=app_manager_rollback(app);
+            else e=app_manager_select(app,!strcmp(op,"activate"));
         }
-        snprintf(json + used, sizeof(json) - used, "]}");
-        httpd_resp_set_type(request, "application/json");
-        httpd_resp_set_hdr(request, "Cache-Control", "no-store");
-        response = httpd_resp_sendstr(request, json);
-    }
-    else
-    {
-        if (!strcmp(op, "activate") || !strcmp(op, "switch") || !strcmp(op, "rollback") || !strcmp(op, "remove"))
-        {
-            esp_err_t e = ESP_ERR_INVALID_ARG;
-            if (!request->content_len) {
-                if (!strcmp(op, "remove")) e = app_catalog_remove(app_catalog_find(app));
-                else if (!strcmp(op, "rollback")) e = photoframe_plugin_rollback_app(app);
-                else e = photoframe_plugin_select(app, !strcmp(op, "activate"));
-            }
-            response = send_text(request, e == ESP_OK ? "200 OK" : "409 Conflict",
-                e == ESP_OK ? "application operation completed\n" : "operation rejected or rolled back\n");
-        }
-        else if (op[0])
-        {
-            response = send_text(request, "400 Bad Request", "unknown operation\n");
-        }
-        else if (request->content_len > MODULE_SLOT_BYTES)
-        {
-            response =
-                send_text(request, "413 Content Too Large", "module too large\n");
-        }
-        else if (request->content_len < MODULE_HEADER_BYTES + 52)
-        {
-            response =
-                send_text(request, "400 Bad Request", "module package required\n");
-        }
-        else
-        {
-            char type[40] = {0};
-            httpd_req_get_hdr_value_str(request, "Content-Type", type, sizeof(type));
-            if (strcmp(type, "application/octet-stream") != 0)
-            {
-                response = send_text(request, "415 Unsupported Media Type",
-                                     "module must be application/octet-stream\n");
-            }
-            else
-            {
-                size_t size = request->content_len;
-                uint8_t *package =
-                    heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-                if (!package)
-                    response = send_text(request, "503 Service Unavailable",
-                                         "insufficient memory\n");
-                else
-                {
-                    esp_err_t e = receive_body(request, package, size);
-                    if (e == ESP_OK)
-                        e = app_catalog_stage(app, package, size);
-                    free(package);
-                    const char *status = e == ESP_OK            ? "202 Accepted"
-                                         : e == ESP_ERR_TIMEOUT ? "408 Request Timeout"
-                                         : e == ESP_ERR_INVALID_STATE
-                                             ? "409 Conflict"
-                                             : "422 Unprocessable Content";
-                    response = send_text(request, status,
-                                         e == ESP_OK ? "staged; activate explicitly\n"
-                                                     : "module rejected\n");
-                }
+        response=send_text(request,e==ESP_OK?"200 OK":"409 Conflict",e==ESP_OK?"application operation completed\n":"operation rejected or rolled back\n");
+    } else if(op[0])response=send_text(request,"400 Bad Request","unknown operation\n");
+    else if(request->content_len>MODULE_SLOT_BYTES)response=send_text(request,"413 Content Too Large","module too large\n");
+    else if(request->content_len<MODULE_HEADER_BYTES+52)response=send_text(request,"400 Bad Request","module package required\n");
+    else {
+        char type[40]={0};httpd_req_get_hdr_value_str(request,"Content-Type",type,sizeof(type));
+        if(strcmp(type,"application/octet-stream"))response=send_text(request,"415 Unsupported Media Type","module must be application/octet-stream\n");
+        else {
+            size_t size=request->content_len;uint8_t *package=heap_caps_malloc(size,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+            if(!package)response=send_text(request,"503 Service Unavailable","insufficient memory\n");
+            else {
+                esp_err_t e=receive_body(request,package,size);
+                if(e==ESP_OK)e=app_manager_stage(app,package,size);
+                free(package);
+                const char *status=e==ESP_OK?"202 Accepted":e==ESP_ERR_TIMEOUT?"408 Request Timeout":
+                    e==ESP_ERR_INVALID_STATE?"409 Conflict":"422 Unprocessable Content";
+                response=send_text(request,status,e==ESP_OK?"staged; activate explicitly\n":"module rejected\n");
             }
         }
     }
-    xSemaphoreGive(s_display_lock);
-    return response;
+    app_manager_release();return response;
 }
 
 static esp_err_t wifi_handler(httpd_req_t *request)
@@ -391,12 +313,12 @@ static esp_err_t wifi_handler(httpd_req_t *request)
         return send_text(request, "401 Unauthorized", "unauthorized\n");
     if (request->content_len > 8192)
         return send_text(request, "413 Content Too Large", "Wi-Fi JSON exceeds 8192 bytes\n");
-    if (xSemaphoreTake(s_display_lock, 0) != pdTRUE)
+    if (!app_manager_acquire())
         return send_text(request, "409 Conflict", "busy\n");
     wifi_profiles_t profiles;
     esp_err_t response;
     if (request->method == HTTP_GET) {
-        esp_err_t e = wifi_sd_load(NULL, false, &profiles);
+        esp_err_t e = app_manager_wifi_read(&profiles);
         char *json = NULL;
         if (e == ESP_OK) e = wifi_profiles_encode(&profiles, &json);
         if (e == ESP_OK) {
@@ -420,7 +342,7 @@ static esp_err_t wifi_handler(httpd_req_t *request)
             esp_err_t e = body ? receive_body(request, body, request->content_len) : ESP_ERR_NO_MEM;
             if (e == ESP_OK) e = wifi_profiles_parse((char *)body, request->content_len, &profiles);
             free(body);
-            if (e == ESP_OK) e = wifi_sd_save(&profiles);
+            if (e == ESP_OK) e = app_manager_wifi_save(&profiles);
             const char *status = e == ESP_OK ? "200 OK" :
                 e == ESP_ERR_TIMEOUT ? "408 Request Timeout" :
                 e == ESP_ERR_INVALID_ARG ? "422 Unprocessable Content" :
@@ -429,7 +351,7 @@ static esp_err_t wifi_handler(httpd_req_t *request)
                 "SD Wi-Fi saved; effective on next reboot\n" : "SD Wi-Fi update failed\n");
         }
     }
-    xSemaphoreGive(s_display_lock);
+    app_manager_release();
     return response;
 }
 
@@ -439,7 +361,7 @@ esp_err_t photopainter_push_server_start(const char *push_token)
     {
         return ESP_ERR_INVALID_ARG;
     }
-    if (s_display_lock != NULL)
+    if (s_server_started)
     {
         return ESP_ERR_INVALID_STATE;
     }
@@ -461,14 +383,6 @@ esp_err_t photopainter_push_server_start(const char *push_token)
     }
     s_push_token_length = token_length;
 
-    s_display_lock = xSemaphoreCreateMutex();
-    if (s_display_lock == NULL)
-    {
-        memset(s_push_token, 0, sizeof(s_push_token));
-        s_push_token_length = 0;
-        return ESP_ERR_NO_MEM;
-    }
-
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.stack_size = 16384;
@@ -482,8 +396,6 @@ esp_err_t photopainter_push_server_start(const char *push_token)
     esp_err_t err = httpd_start(&server, &config);
     if (err != ESP_OK)
     {
-        vSemaphoreDelete(s_display_lock);
-        s_display_lock = NULL;
         memset(s_push_token, 0, sizeof(s_push_token));
         s_push_token_length = 0;
         ESP_LOGE(TAG, "start HTTP server failed: %s", esp_err_to_name(err));
@@ -499,8 +411,6 @@ esp_err_t photopainter_push_server_start(const char *push_token)
     if (err != ESP_OK)
     {
         (void)httpd_stop(server);
-        vSemaphoreDelete(s_display_lock);
-        s_display_lock = NULL;
         memset(s_push_token, 0, sizeof(s_push_token));
         s_push_token_length = 0;
         ESP_LOGE(TAG, "register push endpoint failed: %s", esp_err_to_name(err));
@@ -525,6 +435,7 @@ esp_err_t photopainter_push_server_start(const char *push_token)
     err = httpd_register_uri_handler(server, &wifi_get);
     if (err == ESP_OK) err = httpd_register_uri_handler(server, &wifi_post);
     if (err != ESP_OK) { httpd_stop(server); return err; }
+    s_server_started = true;
     ESP_LOGI(TAG, "POST /api/push ready");
     return ESP_OK;
 }

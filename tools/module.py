@@ -15,6 +15,7 @@ HEADER_SIZE = 4096
 SLOT_SIZE = 1024 * 1024
 MAGIC = 0x31464C45
 ABI = 1
+from app_manifest import manifest
 
 
 def package_elf(data, version, app=None):
@@ -30,8 +31,14 @@ def package_elf(data, version, app=None):
         raise ValueError("expected Xtensa ET_DYN app ELF")
     if not 0 <= version <= 0xFFFFFFFF:
         raise ValueError("version must fit uint32")
+    metadata = manifest(data)
+    abi = 2 if metadata else ABI
+    if metadata:
+        if app and app != metadata["id"]:
+            raise ValueError("manifest and package app ID differ")
+        app = metadata["id"]
     header = struct.pack(
-        "<IIIII32s", MAGIC, 2 if app else 1, ABI, len(data), version, hashlib.sha256(data).digest()
+        "<IIIII32s", MAGIC, 2 if app else 1, abi, len(data), version, hashlib.sha256(data).digest()
     )
     if app:
         header += app.encode().ljust(32, b"\0")
@@ -78,7 +85,7 @@ def request(base, token, action, payload=None, app=None):
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:
-        with opener.open(req, timeout=660 if action == "push" else 60) as response:
+        with opener.open(req, timeout=660 if action in ("push", "switch", "activate", "rollback") else 60) as response:
             return response.status, response.read().decode()
     except urllib.error.HTTPError as error:
         return error.code, error.read().decode()

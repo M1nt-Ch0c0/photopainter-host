@@ -29,8 +29,7 @@ esp_err_t nvs_get_str(nvs_handle_t h, const char *key, char *out, size_t *size)
 }
 esp_err_t wifi_sd_load(const wifi_profiles_t *fallback, bool migrate, wifi_profiles_t *out)
 {
-    assert(mode != 8 && mode != 11);
-    if (mode == 4 || mode == 5 || mode == 12) assert(!fallback && !migrate);
+    if (mode == 4 || mode == 5 || mode == 11 || mode == 12) assert(!fallback && !migrate);
     else assert(migrate);
     if (mode == 0 || mode == 9) assert(!fallback);
     if (mode == 10) { assert(fallback && fallback->count==1); *out=*fallback; return ESP_OK; }
