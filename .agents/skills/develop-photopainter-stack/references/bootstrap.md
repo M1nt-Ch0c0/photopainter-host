@@ -20,7 +20,7 @@ git clone https://github.com/M1nt-Ch0c0/photoframe.git
 git clone https://github.com/M1nt-Ch0c0/ai-quota-frame.git
 ```
 
-Read each repository's `AGENTS.md` before making changes. Keep the sibling layout or set `PHOTOFRAME_COMPONENT_DIR` to the absolute `photoframe` checkout.
+Read each repository's `AGENTS.md` before making changes. Keep the sibling layout for convenience; the host no longer depends on `PHOTOFRAME_COMPONENT_DIR`.
 
 ## 3. Install the pinned ESP-IDF
 
@@ -65,7 +65,7 @@ idf.py build
 python3 tools/doctor.py --strict
 ```
 
-The host build rebuilds and embeds the sibling application ELF. A changed `photoframe` checkout therefore requires a host rebuild and flash before hardware runs that change.
+The host build is independent. Package the separately built app ELF with `tools/module.py`. Follow [module slots](../../../../docs-module-slots.md) for first migration and later business updates; subsequent updates use the inactive slot without rebuilding the host.
 
 Do not flash yet. First identify the exact device and make a verified 16 MiB Flash backup. If a microSD is installed, power off, remove it, and image it with a reader unless the user explicitly waives the SD backup for that run.
 
@@ -81,7 +81,7 @@ make check
 
 Set `CHROME_BIN` only when automatic Chrome discovery fails. Populate `.env` locally with independently generated values. Never display or commit `.env`, and never reuse a management key as `PHOTOFRAME_PUSH_TOKEN`.
 
-Linux service deployment uses `deploy/ai-quota-frame.service`. For interactive Windows use, load `.env` into the process environment without printing values and run the native Windows build. There is no inbound host HTTP port.
+Linux service deployment uses `deploy/ai-quota-frame.service`. For interactive Windows use, load `.env` into the process environment without printing values and run the native Windows build. For macOS, use `deploy/install-source-tunnel.py` and `deploy/install-macos.py` as described in the service README; keep the pusher disabled until a successful one-shot physical test. There is no inbound host HTTP port.
 
 ## 7. Discover before operating hardware
 

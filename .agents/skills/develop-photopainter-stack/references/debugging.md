@@ -78,11 +78,11 @@ The component validates the whole image before touching the panel. A 4xx respons
 
 If boot does not log `photoframe payload ready`:
 
-1. Confirm `photoframe` is beside the host or `PHOTOFRAME_COMPONENT_DIR` is correct.
-2. Rebuild from clean build directories with the pinned IDF.
+1. Read authenticated `/api/module` status and verify the active packaged slot and journal.
+2. Check package SHA, ELF validation, module ABI/version and interrupted trial recovery before rebuilding with the pinned IDF.
 3. Confirm Registry `elf_loader` resolves to 1.3.3 and managed component files are unchanged.
-4. Inspect generated undefined imports and ensure the host symbol table supplies them.
-5. Do not substitute `photoframe.so`; the current host embeds and loads `photoframe.app.elf`.
+4. Inspect undefined imports and ensure the fixed host ABI table supplies them.
+5. Do not substitute `photoframe.so`; the host loads the independently packaged `photoframe.app.elf` from A/B data slots.
 
 If the ELF reports an image error, reproduce it in native component tests before touching E6 code.
 

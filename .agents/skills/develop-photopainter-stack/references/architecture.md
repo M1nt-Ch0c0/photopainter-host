@@ -9,7 +9,7 @@
 | `ai-quota-frame` | Quota collection, 800×480 six-color rendering, active HTTP push, latest-frame queue and retries | Device firmware, inbound HTTP service, device provisioning |
 | `esp32s3` | Links to the three repositories | Source code and build artifacts |
 
-Keep the repositories as siblings for the default host build:
+Keep the repositories as siblings for convenient development; the host builds independently:
 
 ```text
 workspace/
@@ -32,7 +32,7 @@ CLIProxyAPI / optional usage source
    authenticate → bound size → buffer
               │ host bridge symbols
               ▼
-  embedded photoframe.app.elf
+  A/B slot photoframe.app.elf
   relocate → decode all → validate all
               │ only after validation
               ▼
@@ -46,9 +46,9 @@ The device is the HTTP server on port 80. `ai-quota-frame` is only an outbound c
 
 ## ELF mechanism
 
-- The host build invokes `elf_embed_binary()` on the sibling `photoframe` project.
-- The build produces `photoframe.app.elf`, generates the required host symbol table, and embeds the ELF bytes in the factory application.
-- Boot calls `esp_elf_init()`, registers generated symbols, and relocates the embedded ELF.
+- The host build contains no business ELF and never invokes the sibling build.
+- Build the app ELF independently, validate imports against the fixed ABI 1 exports in `main/host_abi.c`, and package it with `tools/module.py`.
+- Boot validates the slot package, recovers the independent NVS journal, then relocates the selected module with Registry `elf_loader`.
 - Each request exposes the validated request buffer through:
 
 ```c
@@ -59,9 +59,9 @@ void photoframe_host_report_result(int result);
 
 - `esp_elf_request()` invokes the entry point. The result callback is mandatory because `elf_loader` 1.3.3 does not propagate an entry return value.
 - `photoframe.so` is a deliverable but the current host does not load it.
-- This is runtime relocation, not a sandbox and not runtime upgrade. Replacing the component currently requires rebuilding and flashing the host.
+- These are trusted native modules, not a sandbox. Authenticated `/api/module` staging, trial activation and rollback update business code without flashing the framework. A trial is confirmed only after a successful physical refresh; failure or reboot before confirmation returns to the active baseline.
 
-The Flash contains bootloader data, a partition table, NVS, PHY data, and one 5 MiB factory application. There is no filesystem, SD mount, separate ELF partition, OTA slot, or rollback slot.
+The Flash contains bootloader data, a partition table, network NVS, one 5 MiB factory application, two 1 MiB ELF slots and a separate NVS journal. There is no filesystem, SD mount or whole-firmware OTA slot. See [module slots](../../../../docs-module-slots.md) for offsets, migration and confirmation semantics.
 
 ## Stable contracts
 
@@ -70,7 +70,7 @@ The Flash contains bootloader data, a partition table, NVS, PHY data, and one 5 
 - `elf_loader`: Registry dependency `^1.3.3`, resolved as 1.3.3; never fork or vendor it.
 - Display pins: SCLK 10, MOSI 11, DC 8, CS 9, RST 12, BUSY 13.
 - Accepted pixels: opaque black, white, yellow, red, blue, or green at exact channel values.
-- Endpoint: only `POST /api/push`, raw PNG, maximum 5 MiB.
+- Image endpoint: `POST /api/push`, raw PNG, maximum 5 MiB. Authenticated module management shares port 80 and the serialized operation lock.
 - Missing or wrong Bearer token: 401. Unconfigured token: 503. Oversized body: 413. Invalid compatible input: 4xx without touching the panel.
 - HTTP 200 is sent only after the display function returns success following final POWER_OFF BUSY completion.
 

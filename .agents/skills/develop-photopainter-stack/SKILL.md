@@ -20,8 +20,8 @@ Treat `photopainter-host`, `photoframe`, and `ai-quota-frame` as one deployed sy
 
 ## Choose the workflow
 
-- For host firmware work, build the sibling `photoframe.app.elf` through the host build and verify the generated ELF imports before flashing.
-- For display-component work, run native tests, build both `.app.elf` and `.so`, then rebuild the host because the active ELF is embedded in the factory application.
+- For host firmware work, build the independent framework and verify its fixed ABI exports. Read [module slots](../../../docs-module-slots.md) for deployment.
+- For display-component work, run native tests, build both `.app.elf` and `.so`, check imports against host ABI 1, then package and stage the app ELF in the inactive slot. Rebuild the host only for a framework or ABI change.
 - For PC service work, run `make check`, verify the rendered PNG contract, and test retry behavior with an HTTP test server before using hardware.
 - For a real-device push, stop any automatic pusher that could race the test, validate the PNG first, issue one request, and wait for the final HTTP result. Restart the service only after the test is understood.
 - For deployment on a new computer, follow the bootstrap reference in order and keep all secrets outside Git.
@@ -31,7 +31,7 @@ Treat `photopainter-host`, `photoframe`, and `ai-quota-frame` as one deployed sy
 - Never print, commit, or copy secret values into commands, logs, documentation, issues, or chat. Let trusted programs consume `.env` and `secrets.env` without displaying them.
 - Never use `aitjcize/esp32-photoframe` or a Waveshare complete firmware as the base. Only reuse the documented display pins and E6 timing.
 - Keep `elf_loader` as the unforked Registry dependency `^1.3.3`.
-- Do not add a WebUI, album, OTA, Home Assistant, deep sleep, public port mapping, or a second host HTTP service.
+- Do not add a WebUI, album, whole-firmware OTA, Home Assistant, deep sleep, public port mapping, or a second host HTTP service.
 - Do not flash or provision a device unless the user authorized it. Back up and hash the 16 MiB Flash first; back up an installed microSD unless the user explicitly waives that backup for the run.
 - Treat opening the native USB serial port as a possible reset. Do not use it merely to check liveness while a push is active.
 - Treat HTTP `200` as the only protocol proof that the physical refresh and final POWER_OFF wait completed. A retained e-paper image is not proof that the ESP32 is powered or online.

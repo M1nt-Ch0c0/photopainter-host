@@ -14,7 +14,7 @@ This is the canonical entry point for AI-assisted work on the three-repository P
 
 This repository owns the ESP32-S3 host: NVS configuration, Wi-Fi, `POST /api/push`, Bearer authentication, request buffering, ELF relocation, and host bridge symbols. Display decoding and E6 timing belong to the sibling `photoframe` repository. Quota collection and PNG rendering belong to `ai-quota-frame`.
 
-The host embeds `photoframe.app.elf` during the build. Changing the component does not change a flashed device until this host is rebuilt and flashed.
+The host now loads an independent app ELF from A/B data slots. Read `docs-module-slots.md` for package, activation, confirmation and rollback. The explicit user-requested module update architecture supersedes the former embedded-only/no-module-update design.
 
 ## Non-negotiable constraints
 
@@ -22,21 +22,21 @@ The host embeds `photoframe.app.elf` during the build. Changing the component do
 - Require ESP-IDF commit `5e6f53cdb31fe5708eae3f55af9737be2822db22`.
 - Resolve `espressif/elf_loader: ^1.3.3` from the Component Registry. Never fork, vendor, or patch it.
 - Do not base work on `aitjcize/esp32-photoframe` or a Waveshare complete firmware.
-- Do not add WebUI, album, OTA, Home Assistant, deep sleep, or an SD dependency.
-- Keep the only device application endpoint as `POST /api/push` on port 80. Do not add public exposure or port mapping.
+- Do not add WebUI, album, whole-firmware OTA, Home Assistant, deep sleep, or an SD dependency. Independent module A/B updates are supported.
+- Keep image pushes on `POST /api/push` and authenticated module management on `/api/module`, both on port 80. Do not add public exposure or port mapping.
 - Preserve status semantics: unconfigured token 503, missing or wrong token 401, over 5 MiB 413, invalid compatible image 4xx, and 200 only after physical refresh plus final POWER_OFF wait.
 - Reject every invalid request before display I/O.
 
 ## Build and test
 
-Keep `photopainter-host` and `photoframe` as sibling checkouts unless `PHOTOFRAME_COMPONENT_DIR` is explicitly set.
+The host builds independently of `photoframe`. The sibling layout is convenient for packaging module builds, but is no longer a host build dependency.
 
 ```bash
 . /path/to/esp-idf/export.sh
 git -C "$IDF_PATH" rev-parse HEAD
 idf.py set-target esp32s3
 idf.py build
-python3 -m unittest tools/test_doctor.py
+python3 -m unittest discover -s tools -p 'test_*.py'
 python3 tools/doctor.py --strict
 ```
 
