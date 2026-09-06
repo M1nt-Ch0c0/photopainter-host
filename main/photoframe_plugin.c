@@ -1,6 +1,6 @@
 #include "photoframe_plugin.h"
 
-#include "module_slots.h"
+#include "app_catalog.h"
 #include <limits.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -18,6 +18,7 @@ static esp_elf_t s_elf;
 
 static uint32_t s_version;
 static int s_slot = -1;
+static int s_app = -1;
 extern esp_elf_symbol_table_t g_esp_photoframe_elfsyms[];
 
 /* These three functions are the deliberately tiny payload-to-host ABI. The
@@ -44,6 +45,8 @@ static void photoframe_plugin_deinit(void)
         return;
     }
     s_ready = false;
+    s_slot = s_app = -1;
+    s_version = 0;
     esp_elf_deinit(&s_elf);
 }
 
@@ -67,6 +70,7 @@ static esp_err_t load_slot(int slot)
     }
     s_ready = true;
     s_slot = slot;
+    s_app = app_catalog_running();
     s_version = header.version;
     ESP_LOGI(TAG, "independent payload ready: slot=%d version=%lu bytes=%lu", slot,
              (unsigned long)s_version, (unsigned long)header.length);
@@ -86,30 +90,49 @@ esp_err_t photoframe_plugin_init(void)
     return err;
 }
 
-esp_err_t photoframe_plugin_activate(void)
+static esp_err_t load_current(void)
 {
-    esp_err_t err = module_slots_begin_trial();
-    if (err != ESP_OK)
-        return err;
-    err = load_slot(module_slots_state().pending);
-    if (err != ESP_OK)
-    {
-        (void)module_slots_rollback();
-        (void)load_slot(module_slots_state().active);
+    module_state_t s = module_slots_state();
+    return load_slot(s.trial ? s.pending : s.active);
+}
+
+esp_err_t photoframe_plugin_select(const char *id, bool update)
+{
+    int app = app_catalog_find(id);
+    esp_err_t err = app_catalog_begin(app, update);
+    if (err != ESP_OK) return err;
+    err = load_current();
+    if (err != ESP_OK) {
+        if (app_catalog_cancel() == ESP_OK) (void)load_current();
+        /* If journal cancellation fails, keep execution disabled until reboot. */
     }
     return err;
 }
+esp_err_t photoframe_plugin_activate(void)
+{ return photoframe_plugin_select("photoframe", true); }
 
-esp_err_t photoframe_plugin_rollback(void)
+esp_err_t photoframe_plugin_rollback_app(const char *id)
 {
-    esp_err_t err = module_slots_rollback();
-    if (err == ESP_OK)
-    {
-        err = load_slot(module_slots_state().active);
-        if (err != ESP_OK && module_slots_recover() == ESP_OK)
-            (void)load_slot(module_slots_state().active);
+    int app = app_catalog_find(id);
+    bool reload = app == app_catalog_running();
+    esp_err_t err = app_catalog_rollback(app);
+    if (err == ESP_OK && reload) {
+        err = load_current();
+        if (err != ESP_OK && module_slots_recover() == ESP_OK) (void)load_current();
     }
     return err;
+}
+esp_err_t photoframe_plugin_rollback(void)
+{
+    const app_catalog_t *c = app_catalog_get();
+    int app = app_catalog_running();
+    return c && app >= 0 ? photoframe_plugin_rollback_app(c->apps[app].id) : ESP_ERR_INVALID_STATE;
+}
+int photoframe_plugin_app(void) { return s_app; }
+static bool in_trial(void)
+{
+    const app_catalog_t *c = app_catalog_get();
+    return c && c->trial_app >= 0;
 }
 
 uint32_t photoframe_plugin_version(void) { return s_version; }
@@ -139,7 +162,7 @@ int photoframe_plugin_render(const uint8_t *png, size_t size)
     {
         ESP_LOGE(TAG, "payload request failed: %d", request_result);
         photoframe_plugin_deinit();
-        if (module_slots_state().trial)
+        if (in_trial())
             (void)photoframe_plugin_rollback();
         return PHOTOFRAME_RESULT_UNAVAILABLE;
     }
@@ -147,7 +170,7 @@ int photoframe_plugin_render(const uint8_t *png, size_t size)
     {
         ESP_LOGE(TAG, "payload returned without reporting a result");
         photoframe_plugin_deinit();
-        if (module_slots_state().trial)
+        if (in_trial())
             (void)photoframe_plugin_rollback();
         return PHOTOFRAME_RESULT_UNAVAILABLE;
     }
@@ -157,7 +180,7 @@ int photoframe_plugin_render(const uint8_t *png, size_t size)
         if (module_slots_confirm() != ESP_OK)
             ESP_LOGE(TAG, "trial confirmation failed; next reset will roll back");
     }
-    else if (result <= PHOTOFRAME_RESULT_DISPLAY && module_slots_state().trial)
+    else if (result <= PHOTOFRAME_RESULT_DISPLAY && in_trial())
     {
         (void)photoframe_plugin_rollback();
     }

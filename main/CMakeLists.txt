@@ -8,6 +8,9 @@ idf_component_register(
         "host_abi.c"
         "push_server.c"
         "wifi_station.c"
+        "wifi_profiles.c"
+        "wifi_profiles_json.c"
+        "wifi_sd.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         esp_event
@@ -15,6 +18,9 @@ idf_component_register(
         esp_netif
         esp_timer
         esp_wifi
+        fatfs
+        sdmmc
+        esp_driver_sdmmc
         esp_driver_gpio
         esp_driver_i2c
         esp_driver_spi

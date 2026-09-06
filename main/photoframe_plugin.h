@@ -27,3 +27,7 @@ esp_err_t photoframe_plugin_activate(void);
 esp_err_t photoframe_plugin_rollback(void);
 uint32_t photoframe_plugin_version(void);
 int photoframe_plugin_slot(void);
+
+esp_err_t photoframe_plugin_select(const char *id, bool update);
+esp_err_t photoframe_plugin_rollback_app(const char *id);
+int photoframe_plugin_app(void);

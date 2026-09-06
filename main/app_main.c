@@ -32,7 +32,7 @@ void app_main(void)
         clear_config(&config);
         return;
     }
-    if (config.wifi_ssid[0] == '\0') {
+    if (config.wifi.count == 0) {
         ESP_LOGE(TAG, "Wi-Fi is not provisioned");
         clear_config(&config);
         return;
@@ -46,7 +46,7 @@ void app_main(void)
          * never touch the panel. */
     }
 
-    err = photopainter_wifi_connect(config.wifi_ssid, config.wifi_password);
+    err = photopainter_wifi_connect(&config.wifi);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi startup failed: %s", esp_err_to_name(err));
         clear_config(&config);

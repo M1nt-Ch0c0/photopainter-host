@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
+import struct
+import re
 import os
 from pathlib import Path
 import shutil
@@ -39,6 +42,52 @@ def load_env(path: Path) -> dict[str, str]:
     return values
 
 
+def validate_network(ssid: str, password: str) -> None:
+    if not isinstance(ssid, str) or not isinstance(password, str):
+        raise ValueError("network fields must be strings")
+    if not 1 <= len(ssid.encode()) <= 32 or any(ord(c) < 32 or ord(c) == 127 for c in ssid):
+        raise ValueError("SSID must be 1..32 UTF-8 bytes without control characters")
+    if password and not (8 <= len(password) <= 63 and all(32 <= ord(c) <= 126 for c in password)
+                         or re.fullmatch(r"[0-9a-fA-F]{64}", password)):
+        raise ValueError("password must be empty, 8..63 printable ASCII, or 64 hex digits")
+
+
+def load_profiles(path: Path) -> list[tuple[str, str]]:
+    def unique(pairs):
+        d = {}
+        for k, v in pairs:
+            if k in d: raise ValueError("duplicate JSON key")
+            d[k] = v
+        return d
+    if path.stat().st_size > 8192: raise ValueError("Wi-Fi JSON exceeds 8192 bytes")
+    try:
+        root = json.loads(path.read_text(), object_pairs_hook=unique)
+    except (json.JSONDecodeError, RecursionError):
+        raise ValueError("invalid Wi-Fi JSON") from None
+    if not isinstance(root, dict) or type(root.get("version")) is not int or root["version"] != 1:
+        raise ValueError("Wi-Fi JSON version must be 1")
+    networks = root.get("networks")
+    if not isinstance(networks, list) or len(networks) > 10:
+        raise ValueError("expected at most 10 networks")
+    profiles = []
+    for n in networks:
+        if not isinstance(n, dict): raise ValueError("invalid network entry")
+        ssid, password = n.get("ssid"), n.get("password")
+        validate_network(ssid, password)
+        if any(previous[0] == ssid for previous in profiles): raise ValueError("duplicate SSID")
+        profiles.append((ssid, password))
+    return profiles
+
+
+def profiles_blob(profiles: list[tuple[str, str]]) -> bytes:
+    if len(profiles) > 10: raise ValueError("at most 10 networks")
+    data = struct.pack("<II", 1, len(profiles))
+    for ssid, password in profiles:
+        validate_network(ssid, password)
+        data += ssid.encode().ljust(33, b"\0") + password.encode().ljust(65, b"\0")
+    return data.ljust(988, b"\0")
+
+
 def validated(
     values: dict[str, str], *, allow_empty_push_token: bool = False
 ) -> tuple[str, str, str]:
@@ -47,10 +96,7 @@ def validated(
     token = values.get("PUSH_TOKEN", "")
     if not 1 <= len(ssid.encode()) <= 32:
         raise ValueError("WIFI_SSID must be 1..32 UTF-8 bytes")
-    if len(password.encode()) > 64:
-        raise ValueError("WIFI_PASSWORD must be at most 64 UTF-8 bytes")
-    if 0 < len(password.encode()) < 8:
-        raise ValueError("WIFI_PASSWORD must be empty or at least 8 UTF-8 bytes")
+    validate_network(ssid, password)
     try:
         token_bytes = token.encode("ascii")
     except UnicodeEncodeError as error:
@@ -122,6 +168,7 @@ def copy_private(source: Path, destination: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port")
+    parser.add_argument("--wifi-json", type=Path, help="ordered Wi-Fi profiles in the legacy SD JSON schema")
     parser.add_argument("--config", type=Path, default=Path("secrets.env"))
     parser.add_argument("--baud", default="460800")
     parser.add_argument("--generate-only", type=Path)
@@ -130,10 +177,16 @@ def main() -> int:
     if args.generate_only is None and not args.port:
         parser.error("--port is required unless --generate-only is used")
 
+    values = load_env(args.config)
+    profiles = load_profiles(args.wifi_json) if args.wifi_json else None
+    if profiles is not None:
+        values["WIFI_SSID"], values["WIFI_PASSWORD"] = profiles[0] if profiles else ("unconfigured", "")
     ssid, password, token = validated(
-        load_env(args.config),
+        values,
         allow_empty_push_token=args.allow_empty_push_token,
     )
+    if profiles is not None and any(password == token for _, password in profiles):
+        raise ValueError("PUSH_TOKEN must be independent from all Wi-Fi passwords")
     idf_path_value = os.environ.get("IDF_PATH", "")
     if not idf_path_value:
         raise SystemExit("IDF_PATH is unset; source the pinned ESP-IDF export.sh")
@@ -156,8 +209,11 @@ def main() -> int:
             writer = csv.writer(stream)
             writer.writerow(("key", "type", "encoding", "value"))
             writer.writerow(("photo", "namespace", "", ""))
-            writer.writerow(("wifi_ssid", "data", "string", ssid))
-            writer.writerow(("wifi_pass", "data", "string", password))
+            if profiles is None:
+                writer.writerow(("wifi_ssid", "data", "string", ssid))
+                writer.writerow(("wifi_pass", "data", "string", password))
+            else:
+                writer.writerow(("wifi_profiles", "data", "hex2bin", profiles_blob(profiles).hex()))
             writer.writerow(("push_token", "data", "string", token))
 
         subprocess.run(

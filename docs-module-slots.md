@@ -1,5 +1,7 @@
 # Independent ELF modules
 
+> 当前宿主已扩展为 5 应用独立 A/B；Wi-Fi、应用 ID、迁移和管理命令以 [新指南](docs-multi-apps.md) 为准。本文保留旧单应用包和首次种子部署的说明。
+
 The host firmware builds without a sibling checkout and contains no business ELF.
 `main/host_abi.c` owns ABI version 1's fixed host exports; an independent module is
 built with the same pinned ESP-IDF commit and the app ELF profile. Registry

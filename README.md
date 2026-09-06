@@ -4,6 +4,8 @@
 
 四个仓库的职责、架构图、耦合边界与修改影响，见 [PhotoPainter 架构总览](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/ARCHITECTURE.md)。
 
+当前多 Wi-Fi（SD JSON / NVS）与多应用独立 A/B 安装、切换、更新命令，见 [多应用与多 Wi-Fi 指南](docs-multi-apps.md)。
+
 ## 刷写
 
 本固件只适用于 7.3 英寸、800×480、N16R8 的 ESP32-S3 PhotoPainter。刷写前先把 16 MiB Flash 完整读出并校验 SHA-256；若机内有 microSD，也应关机取卡、用读卡器制作整卡镜像并校验。备份文件放在仓库之外。
@@ -27,7 +29,7 @@ chmod 600 secrets.env
 ./tools/provision.py --port /dev/serial/by-id/your-device --config secrets.env
 ```
 
-固件不读写 microSD，也不提供整机 OTA；业务模块通过独立槽更新。
+固件启动时可只读 SD Wi-Fi 配置；应用包保存在内部 Flash，不依赖 SD，不提供整机 OTA。
 
 ## 推图
 
