@@ -55,6 +55,7 @@ def main():
     parser.add_argument('--index', type=int, help='one-based position')
     parser.add_argument('--to', type=int, help='one-based new priority')
     args = parser.parse_args()
+    source = 'main' if args.file.exists() else 'backup' if Path(str(args.file)+'.bak').exists() else 'missing'
     profiles = read(args.file)
     if args.action == 'upsert':
         if args.config is None:
@@ -71,7 +72,8 @@ def main():
             profiles.insert(args.to - 1, item)
     if args.action != 'status':
         save(args.file, profiles)
-    print(json.dumps({'operation': args.action, 'networks': len(profiles)}))
+        source = 'main'
+    print(json.dumps({'operation': args.action, 'source': source, 'networks': len(profiles)}))
     return 0
 
 

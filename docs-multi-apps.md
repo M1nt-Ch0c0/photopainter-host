@@ -33,7 +33,7 @@ python3 tools/wifi_profiles.py remove --file /Volumes/SD/config/wifi.json --inde
 python3 tools/wifi_profiles.py status --file /Volumes/SD/config/wifi.json
 ```
 
-管理工具采用相同的 `.tmp`/`.bak` 发布规则；已有主文件损坏时拒绝修改，不能通过备份掩盖。序号从 1 开始。移除最后一个网络会保存明确的空列表。编辑卡前关机取卡并备份，完成后插回设备重启。
+管理工具采用相同的 `.tmp`/`.bak` 发布规则；已有主文件损坏时拒绝修改，不能通过备份掩盖。status 同时返回 `main`、`backup` 或 `missing` 来源，区分明确空列表与文件不存在。序号从 1 开始。移除最后一个网络会保存明确的空列表。编辑卡前关机取卡并备份，完成后插回设备重启。
 
 无卡部署可将同格式的私有文件写入 NVS：
 
