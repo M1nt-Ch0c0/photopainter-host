@@ -1,6 +1,6 @@
 # PhotoPainter stack architecture
 
-For the reader-facing Chinese overview, Mermaid diagrams, coupling boundaries and change-impact matrix, see the [stack architecture](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/ARCHITECTURE.md). This reference records the implementation contracts for development.
+For the reader-facing Chinese overview, Mermaid diagrams, coupling boundaries and change-impact matrix, see the [stack architecture](https://github.com/M1nt-Ch0c0/esp32s3/blob/codex/multi-wifi-apps/ARCHITECTURE.md). This reference records the implementation contracts for development.
 
 ## Repository ownership
 
@@ -63,7 +63,7 @@ void photoframe_host_report_result(int result);
 - `photoframe.so` is a deliverable but the current host does not load it.
 - These are trusted native modules, not a sandbox. Authenticated `/api/module` staging, trial activation and rollback update business code without flashing the framework. A trial is confirmed only after a successful physical refresh; failure or reboot before confirmation returns to the active baseline.
 
-The Flash contains bootloader data, a partition table, network NVS, one 5 MiB factory application, two 1 MiB ELF slots and a separate NVS journal. The new multi-app layout adds an 8 MiB arena for four additional A/B banks. An optional SDMMC FAT mount reads Wi-Fi JSON at boot and atomically migrates missing JSON from NVS/legacy wifi.txt; application storage does not use SD. There is no whole-firmware OTA slot. See [module slots](../../../../docs-module-slots.md) for offsets, migration and confirmation semantics.
+The Flash contains bootloader data, a partition table, network NVS, one 5 MiB factory application, two 1 MiB ELF slots and a separate NVS journal. The new multi-app layout adds an 8 MiB arena for four additional A/B banks. An optional SDMMC FAT mount reads Wi-Fi JSON at boot and atomically migrates missing JSON from NVS/legacy wifi.txt; authenticated `/api/wifi` reads or atomically updates that JSON, taking effect on next reboot; application storage does not use SD. There is no whole-firmware OTA slot. See [module slots](../../../../docs-module-slots.md) for offsets, migration and confirmation semantics.
 
 ## Stable contracts
 
@@ -72,13 +72,13 @@ The Flash contains bootloader data, a partition table, network NVS, one 5 MiB fa
 - `elf_loader`: Registry dependency `^1.3.3`, resolved as 1.3.3; never fork or vendor it.
 - Display pins: SCLK 10, MOSI 11, DC 8, CS 9, RST 12, BUSY 13.
 - Accepted pixels: opaque black, white, yellow, red, blue, or green at exact channel values.
-- Image endpoint: `POST /api/push`, raw PNG, maximum 5 MiB. Authenticated module management shares port 80 and the serialized operation lock.
+- Image endpoint: `POST /api/push`, raw PNG, maximum 5 MiB. Authenticated module and SD Wi-Fi management share port 80 and the serialized operation lock.
 - Missing or wrong Bearer token: 401. Unconfigured token: 503. Oversized body: 413. Invalid compatible input: 4xx without touching the panel.
 - HTTP 200 is sent only after the display function returns success following final POWER_OFF BUSY completion.
 
 ## Security boundary
 
-Keep Wi-Fi credentials and the device push token only in ignored host-local configuration or NVS. Keep CLIProxyAPI, CPAMP, OAuth, and other management secrets only on the PC. The device push token must be independent. Never expose the device port on the public Internet.
+Keep Wi-Fi credentials and the device push token only in protected host-local configuration, SD Wi-Fi JSON, or NVS. Keep CLIProxyAPI, CPAMP, OAuth, and other management secrets only on the PC. The device push token must be independent. Never expose the device port on the public Internet.
 
 Current extensions and migration: [multi-app and Wi-Fi guide](../../../../docs-multi-apps.md).
 
