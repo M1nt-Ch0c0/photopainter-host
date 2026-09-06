@@ -29,7 +29,7 @@ chmod 600 secrets.env
 ./tools/provision.py --port /dev/serial/by-id/your-device --config secrets.env
 ```
 
-固件启动时可只读 SD Wi-Fi 配置；应用包保存在内部 Flash，不依赖 SD，不提供整机 OTA。
+固件启动时可读取或首次迁移 SD Wi-Fi 配置；应用包保存在内部 Flash，不依赖 SD，不提供整机 OTA。
 
 ## 推图
 
@@ -48,3 +48,5 @@ python3 tools/module.py push --url http://DEVICE_IP --input frame.png
 完整的首次部署、模块更新和手动回退命令见 [双槽说明](docs-module-slots.md)；实机验证结果与已修复的电源问题见 [验证记录](docs/validation-2026-09-06.md)。
 
 不要提交 `secrets.env`、生成的 NVS 镜像或含密钥的命令输出，也不要把设备 HTTP 端口映射到公网。
+
+多应用真实安装、刷屏、回退和多 Wi-Fi 顺序尝试的最新证据见 [多应用实机记录](docs/validation-multi-app-hardware.md)。

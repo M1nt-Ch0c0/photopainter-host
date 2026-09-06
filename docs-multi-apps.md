@@ -17,11 +17,23 @@ SD 卡的 `config/wifi.json` 继续使用原格式：
 
 启动优先读取 SD 文件；主文件不存在时允许读取 `.bak`。合法空列表是明确的空配置；损坏主文件不会被 `.bak` 或 NVS 掩盖。没有卡或没有配置文件时读取 NVS `wifi_profiles`，只有该键不存在才兼容原 `wifi_ssid` / `wifi_pass` 单组配置。NVS 多组数据同样经过校验。
 
-SD 只在启动时挂载、读取并卸载，不格式化、不改写文件、不访问照片；SDMMC 引脚来自官方 PhotoPainter `a5e8f757ba0c` 的 `sdcard_bsp.h`：CLK 39、CMD 41、D0 40、D1 1、D2 2、D3 38。SD 与面板 SPI 总线分开。板上没有卡检测信号，初始化命令超时按无卡处理，其他挂载错误会停止配网并保留原数据。
+SD 只在启动时挂载、读取或首次迁移 Wi-Fi 配置后卸载，不格式化、不访问照片；SDMMC 引脚来自官方 PhotoPainter `a5e8f757ba0c` 的 `sdcard_bsp.h`：CLK 39、CMD 41、D0 40、D1 1、D2 2、D3 38。SD 与面板 SPI 总线分开。板上没有卡检测信号，初始化命令超时按无卡处理，其他挂载错误会停止配网并保留原数据。
 
 连接由一个常驻任务管理，每组等待连接/IP 最多 20 秒；明确断线或连接错误可提前尝试下一组。连接成功后保持当前网络；断线后从最高优先级重新尝试。全部失败等待 5 秒后重新遍历，永不因连接失败删除凭据。Wi-Fi 保持 `WIFI_PS_NONE`。
 
-当前宿主的恢复入口是串口配置工具；没有引入旧整机固件的配网 WebUI、相册、SD 图片缓存或深睡。旧 `wifi.txt` 自动迁移与写回 SD 不属于此实现：首次配置可直接使用上述 JSON，或通过串口写入多组 NVS。SD 可随时移除后使用原有 NVS，但 SD 列表不会自动复制进 NVS。
+首次缺少 JSON 和 `.bak` 时，会先从合法 NVS 多组列表或旧单组配置迁移；没有 NVS 网络配置时，再读取卡根目录旧 `wifi.txt`（SSID 与密码各一行，支持 CRLF、开放网络）。创建 `config` 目录后，将完整 JSON 写到 `.tmp`，flush/fsync 后发布；更新保存时先保留 `.bak`，发布成功才清理。中断留下的 `.tmp` 不会被当成合法配置。坏文件、损坏 NVS、写入失败不会被静默覆盖或视为成功。SD 列表不会反向覆盖 NVS；拔卡后使用原 NVS。
+
+同名 SSID 更新密码、追加新 SSID、移除和调整优先级由配套文件管理工具提供；保留其他网络和原顺序。旧整机固件的 AP 配网页面没有复制到独立宿主，恢复入口是 SD 配置文件和串口工具；网络全部不可用时持续有间隔地重试。相册、SD 图片缓存和深睡也没有引入。
+
+```bash
+# private-network.env 含 WIFI_SSID / WIFI_PASSWORD，值不会出现在参数或输出中。
+python3 tools/wifi_profiles.py upsert --file /Volumes/SD/config/wifi.json --config /private/path/private-network.env
+python3 tools/wifi_profiles.py move --file /Volumes/SD/config/wifi.json --index 2 --to 1
+python3 tools/wifi_profiles.py remove --file /Volumes/SD/config/wifi.json --index 2
+python3 tools/wifi_profiles.py status --file /Volumes/SD/config/wifi.json
+```
+
+管理工具采用相同的 `.tmp`/`.bak` 发布规则；已有主文件损坏时拒绝修改，不能通过备份掩盖。序号从 1 开始。移除最后一个网络会保存明确的空列表。编辑卡前关机取卡并备份，完成后插回设备重启。
 
 无卡部署可将同格式的私有文件写入 NVS：
 
@@ -85,6 +97,7 @@ flowchart TB
 
 ```bash
 # 两个应用分别构建 ELF；以下路径用各自真实构建产物替换。
+# 可直接使用 photoframe 仓库 examples/color-test 的独立第二应用。
 python3 tools/module.py package --app clock --version 1 --input /path/to/clock.app.elf --output /tmp/clock-v1.pkg
 python3 tools/module.py stage --app clock --url http://DEVICE_IP --input /tmp/clock-v1.pkg
 python3 tools/module.py activate --app clock --url http://DEVICE_IP

@@ -63,7 +63,7 @@ void photoframe_host_report_result(int result);
 - `photoframe.so` is a deliverable but the current host does not load it.
 - These are trusted native modules, not a sandbox. Authenticated `/api/module` staging, trial activation and rollback update business code without flashing the framework. A trial is confirmed only after a successful physical refresh; failure or reboot before confirmation returns to the active baseline.
 
-The Flash contains bootloader data, a partition table, network NVS, one 5 MiB factory application, two 1 MiB ELF slots and a separate NVS journal. The new multi-app layout adds an 8 MiB arena for four additional A/B banks. An optional SDMMC FAT mount reads Wi-Fi JSON at boot only; application storage does not use SD. There is no whole-firmware OTA slot. See [module slots](../../../../docs-module-slots.md) for offsets, migration and confirmation semantics.
+The Flash contains bootloader data, a partition table, network NVS, one 5 MiB factory application, two 1 MiB ELF slots and a separate NVS journal. The new multi-app layout adds an 8 MiB arena for four additional A/B banks. An optional SDMMC FAT mount reads Wi-Fi JSON at boot and atomically migrates missing JSON from NVS/legacy wifi.txt; application storage does not use SD. There is no whole-firmware OTA slot. See [module slots](../../../../docs-module-slots.md) for offsets, migration and confirmation semantics.
 
 ## Stable contracts
 
@@ -81,3 +81,5 @@ The Flash contains bootloader data, a partition table, network NVS, one 5 MiB fa
 Keep Wi-Fi credentials and the device push token only in ignored host-local configuration or NVS. Keep CLIProxyAPI, CPAMP, OAuth, and other management secrets only on the PC. The device push token must be independent. Never expose the device port on the public Internet.
 
 Current extensions and migration: [multi-app and Wi-Fi guide](../../../../docs-multi-apps.md).
+
+Application imports resolve through the registered host bridge table plus the enabled, unmodified Registry libc/ESP-IDF symbol tables. Independent color-test uses Registry `fputs`; the bridge ABI stays at version 1.

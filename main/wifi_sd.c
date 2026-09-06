@@ -5,7 +5,7 @@
 #include "esp_log.h"
 #include "sdmmc_cmd.h"
 
-esp_err_t wifi_sd_load(wifi_profiles_t *profiles)
+esp_err_t wifi_sd_load(const wifi_profiles_t *fallback, bool allow_migration, wifi_profiles_t *profiles)
 {
     /* Official PhotoPainter board pins, upstream a5e8f757ba0c, sdcard_bsp.h.
      * SDMMC is separate from the display SPI bus; no PMIC rail writes. */
@@ -28,7 +28,8 @@ esp_err_t wifi_sd_load(wifi_profiles_t *profiles)
         if (e == ESP_ERR_TIMEOUT) return ESP_ERR_NOT_FOUND;
         return e;
     }
-    e = wifi_profiles_read_file("/sdcard/config/wifi.json", profiles);
+    e = allow_migration ? wifi_profiles_migrate("/sdcard", fallback, profiles)
+                        : wifi_profiles_read_file("/sdcard/config/wifi.json", profiles);
     esp_err_t unmount = esp_vfs_fat_sdcard_unmount("/sdcard", card);
     if (unmount != ESP_OK) return unmount;
     if (e == ESP_OK) ESP_LOGI("wifi", "loaded %lu profiles from SD", (unsigned long)profiles->count);
