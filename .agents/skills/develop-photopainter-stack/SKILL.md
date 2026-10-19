@@ -21,10 +21,12 @@ Treat `photopainter-host`, `photoframe`, and `ai-quota-frame` as one deployed sy
 ## Choose the workflow
 
 - For host firmware work, build the independent framework and verify its fixed ABI exports. Read [module slots](../../../docs-module-slots.md) for deployment.
-- For display-component work, run native tests, build both `.app.elf` and `.so`, check imports against host ABI 1, then package and stage the app ELF in the inactive slot. Rebuild the host only for a framework or ABI change.
+- For display-component work, run native tests, build both `.app.elf` and `.so`, check imports against the declared host ABI (ABI 2 allowlist or legacy ABI 1), then package and stage the app ELF in the inactive slot. Rebuild the host only for a framework or ABI change.
 - For PC service work, run `make check`, verify the rendered PNG contract, and test retry behavior with an HTTP test server before using hardware.
 - For a real-device push, stop any automatic pusher that could race the test, validate the PNG first, issue one request, and wait for the final HTTP result. Restart the service only after the test is understood.
 - For deployment on a new computer, follow the bootstrap reference in order and keep all secrets outside Git.
+
+For cooperative ABI 2 work, read [runtime guide](../../../docs-runtime-v2.md). The host owns ABI 2 board display I/O; apps own content and restore policy. Keep ABI 1 compatibility.
 
 ## Enforce safety gates
 

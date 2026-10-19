@@ -2,7 +2,11 @@
 
 > **AI / 开发者入口：**先阅读 [`AGENTS.md`](AGENTS.md)。空白电脑部署、三仓联调和真机诊断使用项目级 Skill：[`develop-photopainter-stack`](.agents/skills/develop-photopainter-stack/SKILL.md)。
 
-四个仓库的职责、架构图、耦合边界与修改影响，见 [PhotoPainter 架构总览](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/ARCHITECTURE.md)。
+四个仓库的职责、架构图、耦合边界与修改影响，见 [PhotoPainter 架构总览](https://github.com/M1nt-Ch0c0/esp32s3/blob/codex/multi-wifi-apps/ARCHITECTURE.md)。
+
+当前多 Wi-Fi（SD JSON / NVS）与多应用独立 A/B 安装、切换、更新命令，见 [多应用与多 Wi-Fi 指南](docs-multi-apps.md)。
+
+当前自主首屏、功能键切换、双 ABI 与恢复规则，见 [应用运行层指南](docs-runtime-v2.md)。
 
 ## 刷写
 
@@ -16,7 +20,7 @@ idf.py set-target esp32s3
 idf.py build
 ```
 
-业务 ELF 独立保存在 A/B 数据槽，通过鉴权接口更新和试运行；首次成功刷屏后确认，确认前重启或运行失败回退。框架不再编译或嵌入 `photoframe`。首次迁移涉及分区表、槽 A 种子和独立状态分区，请先阅读 [双槽部署与回退说明](docs-module-slots.md)。后续业务更新不需要重刷主程序。
+业务 ELF 独立保存在 A/B 数据槽，通过鉴权接口更新和试运行；ABI 2 在 START 就绪及所需首屏完成后确认，ABI 1 保持首次成功推图确认；确认前重启或运行失败回退。框架不再编译或嵌入 `photoframe`。首次迁移涉及分区表、槽 A 种子和独立状态分区，请先阅读 [双槽部署与回退说明](docs-module-slots.md)。后续业务更新不需要重刷主程序。
 
 首次刷写后创建本地密钥文件并写入 NVS；`secrets.env` 已被忽略：
 
@@ -27,7 +31,7 @@ chmod 600 secrets.env
 ./tools/provision.py --port /dev/serial/by-id/your-device --config secrets.env
 ```
 
-固件不读写 microSD，也不提供整机 OTA；业务模块通过独立槽更新。
+固件启动时可读取或首次迁移 SD Wi-Fi 配置；应用包保存在内部 Flash，不依赖 SD，不提供整机 OTA。
 
 ## 推图
 
@@ -46,3 +50,5 @@ python3 tools/module.py push --url http://DEVICE_IP --input frame.png
 完整的首次部署、模块更新和手动回退命令见 [双槽说明](docs-module-slots.md)；实机验证结果与已修复的电源问题见 [验证记录](docs/validation-2026-09-06.md)。
 
 不要提交 `secrets.env`、生成的 NVS 镜像或含密钥的命令输出，也不要把设备 HTTP 端口映射到公网。
+
+多应用真实安装、刷屏、回退和多 Wi-Fi 顺序尝试的最新证据见 [多应用实机记录](docs/validation-multi-app-hardware.md)。
