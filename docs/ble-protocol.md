@@ -4,6 +4,11 @@ BLE belongs to the resident host. It is available without working Wi-Fi, valid S
 Wi-Fi JSON, or a running application. It never updates the host firmware or the
 partition table. Applications are still trusted native ELF code, not a sandbox.
 
+This is the resident framework's wire reference. New application business
+protocols belong to the application. The approved photoframe-owned receive
+route is pending; existing host image opcodes remain compatibility features
+and are not being extended. See the [developer Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/codex/framework-wiki/wiki/Home.md).
+
 ## Discovery
 
 The peripheral advertises every 200–300 ms with flags `0x06` and the complete
@@ -65,7 +70,7 @@ There is no pairing, bonding, or link encryption. Authentication uses the existi
 32–128 byte device push token as an HMAC-SHA256 key. The token never crosses BLE.
 Use a randomly generated token: a captured exchange allows offline guessing of
 a weak human-chosen token. The protocol provides authentication, integrity, and
-replay protection, **not confidentiality** for packages or status information.
+replay protection, **not confidentiality** for images, packages or status information.
 Passive observers can see them. Radio denial of service, disconnects and live
 relaying are outside this protection. Native installed code is trusted.
 
@@ -125,7 +130,7 @@ then NUL padding. Package bytes are exactly `tools/module.py package` output.
 | 3 | Status / application list | `offset:u32` | `total:u32, offset:u32, JSON page` (up to 400 bytes) |
 | 4 | Begin | `package_size:u32, full_package_sha256:32, app_id:32` | Received offset `u32` |
 | 5 | Chunk | `offset:u32, data` | Received offset `u32` |
-| 6 | Commit stage | Empty | Empty; explicitly activate next |
+| 6 | Commit current transfer | Empty | Empty; package stages only, image waits for physical completion |
 | 7 | Abort receive | Empty | Empty |
 | 8 | Upload progress | Empty | `received:u32, total:u32` |
 | 9 | Activate pending | `app_id:32` | Empty |
@@ -159,14 +164,17 @@ manifest/imports, ABI and package identity before accepting a candidate.
 | 3 | Shared admission busy (HTTP, button, timer/network event or another upload) |
 | 4 | Invalid request, size, ID or unsupported opcode |
 | 5 | Unexpected offset, gap or conflicting duplicate |
-| 6 | Full-package SHA-256 mismatch |
+| 6 | Full-transfer SHA-256 mismatch |
 | 7 | Memory unavailable |
 | 8 | Invalid catalog/transfer state or missing application |
 | 9 | Package rejected by the existing installer |
 | 10 | Storage/application operation failure |
 | 11 | Session expired |
+| 12 | PNG rejected before display I/O |
+| 13 | Physical display failure |
+| 14 | Image request belongs to another device boot |
 
-Begin acquires the same admission semaphore as HTTP and the function key before
+Package Begin acquires the same admission semaphore as HTTP and the function key before
 allocating up to 1 MiB in PSRAM. It holds admission through commit/abort/timeout/
 disconnect. Commit calls **`app_manager_stage()`**, the identical path used by
 HTTP, and releases input only after it returns. Explicit activate/switch/rollback/
@@ -182,7 +190,7 @@ refresh 200 meanings do not change. Successful staging never activates an app.
 12 blocks in each mbuf pool, external PSRAM host allocation, and Wi-Fi/BLE software
 coexistence. Controller/DMA/task stacks retain the internal memory required by
 ESP-IDF. PSRAM allocation failure is reported; it does not fall back to using a
-megabyte of internal RAM. An upload and the 5 MiB HTTP PNG buffer cannot coexist
+megabytes of internal RAM. Package, BLE PNG and HTTP PNG receive buffers cannot coexist
 because they share admission. Link-layer security is deliberately disabled in
 favor of the authenticated protocol above, not an unauthenticated fallback.
 
@@ -208,6 +216,59 @@ PSA HMAC/SHA. The catalog/runtime recovery tests remain authoritative for A/B.
 Reference APIs: [ESP-IDF NimBLE](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/bluetooth/nimble/index.html),
 [Go Bluetooth](https://github.com/tinygo-org/bluetooth), and
 [Windows Runtime thread cleanup](https://learn.microsoft.com/en-us/windows/win32/api/roapi/nf-roapi-rouninitialize).
+
+## Images without Wi-Fi (v1 additive extension)
+
+**Compatibility implementation, host b4709c0.** This section records the already
+tested host-owned PNG route. New image reception is to be implemented in the
+photoframe ABI 2.1 service, with host authentication and display kept generic;
+that route has not yet been implemented in this baseline.
+
+Discovery version and service UUIDs remain unchanged. Authenticate first and send
+`IMAGE_CAPS`; an older host returns code 4, so clients fail explicitly instead of
+falling back to an IP request. The existing `BEGIN`/`COMMIT` application installer
+is unchanged. PNG images use `IMAGE_BEGIN`, then the same `CHUNK`, `PROGRESS`,
+`ABORT` and `COMMIT` framing. Only one package or image buffer can hold manager
+admission. PNG size is 8 bytes through 5 MiB; complete decoding still enforces
+800×480, opaque exact six-color, non-interlaced PNG before any panel I/O.
+
+| Opcode | Request payload | Successful response payload |
+|---|---|---|
+| 15 `IMAGE_CAPS` | Empty | `minor:u8=1`, `boot_id:16`, `max_png:u32`, `receipt_capacity:u8=4` |
+| 16 `IMAGE_BEGIN` | `boot_id:16`, `request_id:16`, `size:u32`, `sha256:32`, `app_id:32` | `received:u32`, `state:u8`, `result:u16` |
+| 17 `IMAGE_RESULT` | `boot_id:16`, `request_id:16` | `state:u8`, `result:u16`, `size:u32`, `sha256:32`, `app_id:32` |
+
+Integers are little endian; app IDs use the existing zero-padded encoding. Request
+IDs are fresh nonzero random 128-bit values per image intent. State 0 means no
+completion record (or receiving in the BEGIN reply), 1 means executing, and 2
+means finished; **only state 2 with result 0 proves display completion**. An
+unknown RESULT has zeroed remaining fields. New result/error codes are 12 invalid
+PNG, 13 physical display failure, and 14 changed device boot. A mismatched reuse of
+an existing request ID is rejected with code 8.
+
+The host checks the running target and PNG capability with admission held. The
+buffer stays in PSRAM through the existing synchronous `app_manager_render()`;
+this is the same path used by HTTP, including ABI 1/2 validation and confirmation.
+COMMIT's signed success is returned only after physical refresh and final
+POWER_OFF. During that call the BLE radio task continues responding to ATT, but
+the transport worker returns the pending marker while waiting for the manager;
+a new connection may have to wait until this job finishes to authenticate.
+Disconnect does not cancel a live render or free its borrowed bytes.
+
+Before rendering, the host records the request ID, content digest, target and
+size; afterward it records the result. Four recent receipts survive connection
+loss until eviction or reboot. Repeating a matching completed BEGIN returns its
+stored outcome without allocation or another render. A fresh random boot ID
+distinguishes resets. A client that has attempted COMMIT must only query its
+receipt: never infer that an unknown/evicted receipt means no draw occurred.
+Changed boot, missing receipt or mismatched metadata stops automatic repetition
+of that image. These receipts are RAM state, not a durable exactly-once ledger;
+the PC sender also retains its pending identity only for its process lifetime.
+
+Pre-COMMIT connection loss can restart the whole image. Post-COMMIT loss must
+recover the existing result. All commands/results retain the same nonce/HMAC/
+sequence protections. PNG content, like existing package content, is not
+encrypted by this protocol; the token itself is never transmitted.
 
 ## Application BLE service (ABI 2.1)
 

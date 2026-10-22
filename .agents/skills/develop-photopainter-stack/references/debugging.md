@@ -22,8 +22,14 @@ Run `--probe-serial` only when interrupting the current device session is safe. 
 | TCP port 80 opens | Network path and listener exist | HTTP handler returned a response |
 | Unauthenticated push returns 401 | Configured HTTP service is healthy | A full refresh will complete |
 | Authenticated push returns 200 | Request, ELF display call, E6 refresh, and final POWER_OFF wait completed | Human-visible orientation and color correctness |
+| Authenticated BLE image result is complete/OK | The same manager render call and final POWER_OFF wait completed | Human-visible orientation and color correctness |
 
 Always request visual confirmation after a real refresh.
+
+BLE image transfer does not need a Wi-Fi address. If its COMMIT reply is lost,
+query the original request receipt after reconnecting instead of sending another
+draw. Receipts are retained for four completed requests in RAM; a changed boot or
+missing receipt leaves an ambiguous outcome that requires deliberate handling.
 
 ## USB and boot
 

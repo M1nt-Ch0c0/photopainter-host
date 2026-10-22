@@ -1,168 +1,89 @@
-# Independent ELF modules
+# 独立应用包、A/B 与安装管理
 
-> 当前宿主已扩展为 5 应用独立 A/B；Wi-Fi、应用 ID、迁移和管理命令以 [新指南](docs-multi-apps.md) 为准。本文保留 ABI 1 单应用包和首次种子部署的历史说明；当前 ABI 2 自主首屏与功能键行为以 [运行层指南](docs-runtime-v2.md) 为准。
+本页是当前五 bank 框架的管理指南，覆盖 ABI 1/2.0/2.1。旧单应用 ABI 1 部署说明保留在 [历史提交](https://github.com/M1nt-Ch0c0/photopainter-host/blob/3b6f7e2/docs-module-slots.md)，不作为当前分区写入教程。
 
-The host firmware builds without a sibling checkout and contains no business ELF.
-`main/host_abi.c` owns ABI version 1's fixed host exports; an independent module is
-built with the same pinned ESP-IDF commit and the app ELF profile. Registry
-`elf_loader` remains unmodified at 1.3.3. This is relocation of trusted native
-code, not a sandbox. Only authenticated operators should install modules.
+## 包与身份
 
-## Flash layout
+每 APP 固定占用一个 bank，A/B 各 1 MiB，最大五个 APP。包包括 4096 字节头和 ELF payload，总计不超过 1 MiB。format 1 仅保留旧 photoframe ABI 1；format 2 携带 32 字节 NUL 填充 APP ID，可用于 ABI 1/2。
 
-| Partition | Offset | Size | Purpose |
-|---|---|---|---|
-| nvs | 0x9000 | 24 KiB | Wi-Fi and push token |
-| factory | 0x10000 | 5 MiB | Framework firmware |
-| elf_a | 0x510000 | 1 MiB | Module slot A |
-| elf_b | 0x610000 | 1 MiB | Module slot B |
-| elf_state | 0x710000 | 24 KiB | Independent NVS activation journal |
+头部记录 magic `0x31464c45`、格式、ABI 主版本、长度、uint32 发布版本和 payload SHA-256。format 2 在偏移 52 增加 APP ID。ABI 2 的 ELF 另含只读 manifest：身份必须与包头和安装目标一致，导入必须在 SDK 白名单内，使用 BLE 必须声明 2.1。未知布局、能力或导入拒绝，不手工修改包头绕过校验。
 
-Provisioning network credentials does not erase the module journal. On a fresh
-installation slot A must contain a valid packaged module. Flash the partition
-table, framework, network NVS and A package during initial migration, after the
-verified full-device backup. Erase the B slot and module journal for that first
-installation only. Subsequent framework flashes must preserve the slots/journal.
+发布版本是操作者分配的标签，不是反降级计数器；SHA-256 是完整性校验，不是作者签名。APP 是受信任原生代码，不是沙箱。
 
-### First installation or migration from embedded ELF
+## 构建和打包
 
-These commands replace the partition table and initialize both module slots.
-Use them only after identifying the correct device, obtaining flash authorization,
-stopping automatic pushers, and making a verified full 16 MiB backup. They are
-not the routine business-update procedure. Set `PORT` to the discovered serial
-port and `BACKUP_DIR` to a private directory outside every repository.
+在固定 IDF 提交 `5e6f53cdb31fe5708eae3f55af9737be2822db22` 与 Registry elf_loader 1.3.3 下独立构建 APP。最小工程见 [Wiki 快速开始](https://github.com/M1nt-Ch0c0/esp32s3/blob/codex/framework-wiki/wiki/Quickstart.md)。
 
 ```sh
-# In the pinned IDF environment, from photopainter-host:
-python -m esptool --chip esp32s3 --port "$PORT" read-flash \
-  0 0x1000000 "$BACKUP_DIR/flash-original.bin"
-python -m esptool --chip esp32s3 --port "$PORT" verify-flash \
-  0 "$BACKUP_DIR/flash-original.bin"
-# Record a SHA-256 digest as well; use sha256sum on Linux.
-shasum -a 256 "$BACKUP_DIR/flash-original.bin" > "$BACKUP_DIR/SHA256SUMS"
-
-# Build photoframe.app.elf separately using the command in the next section.
-idf.py build
-python tools/module.py package --input ../photoframe/build-app/photoframe.app.elf \
-  --output build/module-seed.pkg --version 1
-# Fill the ignored secrets.env locally first. The tool does not display values.
-python tools/provision.py --config secrets.env \
-  --generate-only "$BACKUP_DIR/new-config.nvs.bin"
-
-# FIRST MIGRATION ONLY: A + B + independent journal, 0x510000..0x715fff.
-python -m esptool --chip esp32s3 --port "$PORT" --after no-reset \
-  erase-region 0x510000 0x206000
-python -m esptool --chip esp32s3 --port "$PORT" write-flash \
-  --flash-mode dio --flash-size 16MB --flash-freq 80m \
-  0x0 build/bootloader/bootloader.bin \
-  0x8000 build/partition_table/partition-table.bin \
-  0x9000 "$BACKUP_DIR/new-config.nvs.bin" \
-  0x10000 build/photopainter_host.bin \
-  0x510000 build/module-seed.pkg
+# photoframe/examples/lifecycle 中
+idf.py -B build-app -DIDF_TARGET=esp32s3 build
+# photopainter-host 中
+python3 tools/module.py package --app lifecycle --version 1 \
+  --input ../photoframe/examples/lifecycle/build-app/lifecycle.app.elf \
+  --output /tmp/lifecycle-v1.pkg
 ```
 
-Back up an installed microSD unless explicitly waived for the run. A blank seed
-or missing A package cannot serve images; `idf.py flash` alone does not install
-the independent business ELF. After boot, check an unauthenticated push returns
-401, then check module status and perform one valid image push. Only start the
-automatic service after HTTP 200 and visual verification. Install a second
-validated module through the normal update flow to establish a working fallback.
+普通构建生成的固件 bin 不是业务 APP 部署产物。宿主不嵌入业务 ELF；ABI 兼容更新无需重建宿主。
 
-For a later framework-only update with this exact partition layout, write only
-`0x10000 build/photopainter_host.bin`; do not erase or rewrite the module journal
-or either ELF slot. Restore the full backup only as an explicit recovery action:
-it also restores the old application, layout and credentials.
+## 状态与唯一安装路径
 
-## Package and update
+| 字段/操作 | 含义 |
+|---|---|
+| active / previous | 当前确认版本 / 可用回退版本，0=A、1=B、-1=无 |
+| pending / trial | 已暂存候选 / 未确认试运行 |
+| selected / trial_app / loaded_app | bank 索引，不是版本槽 |
+| ready / runtime_ready / confirmed | 已加载 / 满足运行条件 / 已确认且无全局 trial |
+| payload_abi | 运行 APP 的 ABI，顶层 abi=1 是兼容管理封套 |
+| stage/install | 写备用槽并登记候选，不执行 APP |
+| activate | 显式试运行 pending，先持久化 trial |
+| switch | 切到已确认 active，不激活该 APP 的 pending |
+| rollback | 取消候选或恢复 previous |
+| remove | 删除非当前 APP 目录项，不是安全擦除 |
 
-A package consists of a 4096-byte header sector followed by the ELF. The first
-52 bytes are little-endian magic `0x31464c45`, format 1, ABI 1, payload length,
-uint32 module version and SHA-256 of the ELF. The rest of the header is padding.
-The device checks the SHA, ELF32/Xtensa/ET_DYN identity, table/string/section and
-relocation bounds before loading. Host exports remain fixed across business
-updates; adding an import requires a compatible host ABI change.
+HTTP 与 BLE 上传都调用 `app_manager_stage()`，管理操作都经过唯一 App Manager。校验通过后，先使备用旧 fallback 标记失效，再写 payload、读回校验，最后提交包头和 pending；活动槽保持可用。
+
+## 应用 OTA
+
+停止竞争的自动客户端，先核对真实目录和授权，再使用可信启动器加载设备令牌。BLE 不需要设备 IP：
 
 ```sh
-# From photoframe, in the pinned IDF environment:
-idf.py -B build-app -DIDF_TARGET=esp32s3 -DPHOTOFRAME_ARTIFACT=app -DPHOTOFRAME_ABI=1 build
-
-# From photopainter-host:
-python3 tools/module.py package --input ../photoframe/build-app/photoframe.app.elf \
-  --output build/module.pkg --version 10
-python3 tools/module.py status --url http://DEVICE_IP
-python3 tools/module.py stage --url http://DEVICE_IP --input build/module.pkg
-python3 tools/module.py activate --url http://DEVICE_IP
-python3 tools/module.py push --url http://DEVICE_IP --input frame.png
-python3 tools/module.py status --url http://DEVICE_IP
+ai-quota-frame ble status
+ai-quota-frame ble inspect --file /tmp/lifecycle-v1.pkg
+ai-quota-frame ble install --file /tmp/lifecycle-v1.pkg
+ai-quota-frame ble activate --app lifecycle
+ai-quota-frame ble status
 ```
 
-Stop the automatic service before activating a candidate so its first physical
-refresh is deliberate. Inspect status after each step; `0` means A, `1` means B,
-and `-1` means absent. `active` is the confirmed baseline, `previous` the older
-confirmed fallback, `pending` the candidate, and `trial` indicates unconfirmed
-activation. `loaded`, `version` and `ready` describe the currently relocated
-module. During a trial, `loaded` can differ from `active`.
+HTTP 管理保留端口 80 和 `/api/module`：
 
 ```sh
-# Discard pending/trial work, or switch to the previous confirmed version:
-python3 tools/module.py rollback --url http://DEVICE_IP
 python3 tools/module.py status --url http://DEVICE_IP
+python3 tools/module.py stage --app lifecycle --url http://DEVICE_IP --input /tmp/lifecycle-v1.pkg
+python3 tools/module.py activate --app lifecycle --url http://DEVICE_IP
 ```
 
-Staging returns 202; malformed packages return 422, oversize packages 413,
-concurrent operations or rejected state transitions 409, and incomplete uploads
-408. A management 200 proves loading or status retrieval, not a physical refresh.
-Version is an operator-assigned uint32 label, not a signature or an anti-downgrade
-counter. SHA-256 detects corruption; it does not authenticate the package author.
+HTTP stage 成功为 202，管理操作按实际结果返回；忙/非法状态通常 409，坏包 422，超限 413。令牌未配置 503、缺失或错误 401。BLE 返回相应的协议错误码，见 [协议](docs/ble-protocol.md)。鉴权包不能通过代理/重定向泄漏至其他目标。
 
-The tool privately consumes the ignored `secrets.env`; tokens never belong in
-command arguments. All requests use the device's independent Bearer token, no
-proxy and no redirects. `POST /api/push` retains the strict PNG/HTTP 200 physical
-refresh contract. `GET /api/module` reports authenticated module status;
-`POST /api/module` stages `application/octet-stream` and returns 202. Empty POSTs
-to `?op=activate` and `?op=rollback` explicitly switch modules and return 200 only
-when loading succeeds. These management responses do not indicate a panel
-refresh. No public exposure, WebUI, SD or whole-firmware OTA is introduced.
+## 确认与恢复
 
-## Confirmation and rollback
+ABI 2 在成功 START 报告 APP_READY，并完成声明所需的真实首屏后确认。无显示 APP 可不刷新面板；ABI 1 保留首次成功兼容输入确认。不要让框架管理流程强制所有 APP 接收 PNG。应用业务输入见各 APP 文档。
 
-1. An upload is fully received and checked before flash writes. The inactive slot
-   is erased; its old fallback marker is invalidated first. The confirmed active
-   slot is never overwritten.
-2. Payload is written and read back. The header is committed last; an incomplete
-   write cannot become a valid candidate. Only then is `pending` recorded.
-3. Activation persists `trial=1` before relocation. A load failure reopens the
-   confirmed slot. A reset before confirmation clears the candidate and boots
-   the confirmed slot, including panic/watchdog or power interruption.
-4. A candidate becomes active only after the first valid PNG finishes physical
-   refresh and final POWER_OFF wait. NVS commit establishes the old active as
-   `previous`; input rejection does not confirm it.
-5. Display I/O errors, BUSY timeouts, missing callbacks or entry failures during
-   trial roll back. The failed request is not automatically rendered again.
-6. Explicit rollback discards a staged/trial candidate, or switches to the previous
-   confirmed slot. Uploading another candidate consumes that spare slot, while
-   retaining the currently confirmed version.
+未确认前复位或激活失败，恢复此前确认版本/选择。损坏目录不擦除或猜测恢复。开机 active 失败只尝试 previous 一次，后者也失败保持可管理故障空闲，避免无限重启/刷屏。完整状态机与布局见 [多应用指南](docs-multi-apps.md) 和 [运行层](docs-runtime-v2.md)。
 
-The virgin A seed is the initial baseline. Do not deploy automatic pushes until
-that baseline has passed a physical display test. A known-good fallback is only
-as good as its actual display validation.
+管理响应丢失时重连核对 APP、bank、槽和发布版本，不盲目重复激活。显示结果另由 APP 协议确认，暂存成功不是物理完成。回退到旧 ABI 1 时要按旧 APP 的输入合同完成确认。
 
-## Verification
+## 宿主维护与历史迁移
+
+当前五 bank 分区表保持不变；应用 OTA 不写 factory。没有宿主整机 OTA。另获授权更新宿主时，先备份全部 16 MiB 并校验 SHA-256，有 SD 按要求备份，然后只写 `0x10000` 的宿主 bin，保留 NVS、目录和应用槽。
+
+全新设备种子安装或旧两槽布局迁移必须单独审查实际分区与恢复计划，不能照抄历史固定地址。本轮开发不执行分区迁移、provision 或宿主刷写。
+
+## 验证
 
 ```sh
 python3 -m unittest discover -s tools -p 'test_*.py'
-# Optional additional integration check against a real separately built ELF:
-PHOTOFRAME_TEST_ELF=../photoframe/build-app/photoframe.app.elf \
+PHOTOFRAME_TEST_ELF=/absolute/path/app.elf \
   python3 -m unittest discover -s tools -p 'test_*.py'
-idf.py -B build-independent build
 ```
 
-Native tests compile the real firmware validation/state logic against a simulated
-flash and NVS backend. A generated structural fixture makes the default suite
-independent of sibling checkouts and build output; it is not executable firmware.
-The tests require a C compiler and OpenSSL development headers/library. They cover truncated/corrupt ELF bounds, failed payload and
-header writes, metadata commit failures, interrupted trials, confirmation and
-manual rollback. The mock uses OpenSSL for actual SHA-256. Real hardware tests
-must additionally prove module activation, a complete 200 refresh, confirmation,
-reset rollback and subsequent service pushes. Do not equate successful build or
-module activation with a successful physical display.
+测试覆盖包/ELF/manifest、写入中断、确认和回退、manager 与启动恢复。真实测试范围分别见 [运行层记录](docs/validation-runtime-v2.md)、[BLE 记录](docs/validation-ble.md)、[Mac 离线记录](docs/validation-ble-images.md)。历史验证按当时版本解释，不等同当前所有功能均已部署。

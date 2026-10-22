@@ -12,7 +12,9 @@ This is the canonical entry point for AI-assisted work on the three-repository P
 
 ## Repository role
 
-This repository owns the ESP32-S3 host: NVS configuration, Wi-Fi, `POST /api/push`, Bearer authentication, request buffering, ELF relocation, and host bridge symbols. PNG decoding and first-screen policy belong to sibling `photoframe`; ABI 2 E6/power timing belongs to this host's `photopainter_board` component. ABI 1 keeps its legacy driver. Quota collection and PNG rendering belong to `ai-quota-frame`.
+This repository owns the resident framework: network configuration/stack, authentication, application OTA/catalog, ELF loading, the single manager and generic host services. ABI 2 board I/O belongs to `photopainter_board`. PNG decoding, first-screen policy and the approved app-owned BLE receive protocol belong to `photoframe`; collection/rendering/sending belongs to `ai-quota-frame`.
+
+The developer entry is the [framework Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/codex/framework-wiki/wiki/Home.md). Keep framework README workflows about loading and managing applications. Existing HTTP PNG and dedicated host BLE PNG paths remain compatibility features; do not extend the dedicated host image protocol or flash the host for the new app-owned route without a demonstrated generic ABI gap and the user's applicable authorization. The app-owned receive route is approved but not implemented in this documentation baseline.
 
 The host now loads an independent app ELF from A/B data slots. Read `docs-module-slots.md` for package, activation, confirmation and rollback. The explicit user-requested module update architecture supersedes the former embedded-only/no-module-update design.
 
@@ -23,7 +25,7 @@ The host now loads an independent app ELF from A/B data slots. Read `docs-module
 - Resolve `espressif/elf_loader: ^1.3.3` from the Component Registry. Never fork, vendor, or patch it.
 - Do not base work on `aitjcize/esp32-photoframe` or a Waveshare complete firmware.
 - Do not add WebUI, album, whole-firmware OTA, Home Assistant, deep sleep, or an SD dependency for applications. The user-requested SD Wi-Fi boot source and first migration from NVS/wifi.txt are supported. Preserve valid JSON authority and atomic .tmp/.bak publication; never format the card. Independent per-app A/B updates are supported.
-- Keep image pushes on `POST /api/push` and authenticated module management on `/api/module`, and SD Wi-Fi configuration on `/api/wifi`, all on port 80. Do not add public exposure or port mapping.
+- Keep HTTP image pushes on `POST /api/push`, module management on `/api/module`, and SD Wi-Fi configuration on `/api/wifi`, all on port 80. The user-requested BLE image/app transports share the same manager and validation paths. Do not add public exposure or port mapping.
 - Preserve status semantics: unconfigured token 503, missing or wrong token 401, over 5 MiB 413, invalid compatible image 4xx, and 200 only after physical refresh plus final POWER_OFF wait.
 - Reject every invalid request before display I/O.
 
@@ -52,7 +54,7 @@ The IDF revision check must match exactly. Do not edit generated build output or
 - Before flashing, back up and hash all 16 MiB of Flash. Back up an installed microSD unless the user explicitly waives it for that run.
 - Treat opening native USB serial as a device reset that can abort an active HTTP request.
 - Stop automatic pushers before one-shot display tests. Do not allow ambiguous transport failures to cause repeated panel refreshes.
-- Require HTTP 200 and then human visual confirmation. An e-paper image remains visible without power.
+- Require HTTP 200 or an authenticated BLE image-completion receipt, then human visual confirmation. An upload/staging acknowledgement is not physical completion. An e-paper image remains visible without power.
 
 ## Secrets
 
