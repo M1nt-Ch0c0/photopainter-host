@@ -10,6 +10,7 @@
 #include "driver/gpio.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "esp_system.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -115,9 +116,11 @@ void app_manager_status(char *out,size_t size) {
     size_t min_internal=heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
     cJSON *object=cJSON_Parse(out);
     if(!object)return;
-    const char *names[]={"free_psram","minimum_free_psram","free_internal_ram","minimum_free_internal_ram"};
-    size_t values[]={free_psram,min_psram,free_internal,min_internal};
-    for(unsigned i=0;i<4;i++) {
+    const char *names[]={"free_psram","minimum_free_psram","free_internal_ram","minimum_free_internal_ram",
+        "uptime_ms","reset_reason"};
+    double values[]={free_psram,min_psram,free_internal,min_internal,
+        (double)(esp_timer_get_time()/1000),esp_reset_reason()};
+    for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++) {
         cJSON *item=cJSON_GetObjectItemCaseSensitive(object,names[i]);
         if(item)cJSON_SetNumberValue(item,values[i]);
         else cJSON_AddNumberToObject(object,names[i],values[i]);

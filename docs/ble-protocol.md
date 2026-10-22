@@ -130,6 +130,13 @@ then NUL padding. Package bytes are exactly `tools/module.py package` output.
 | 13 | Application characteristic read (ABI 2.1) | `generation:u32, service_revision:u32, index:u32` | Value, at most 128 bytes |
 | 14 | Application characteristic write (ABI 2.1) | Same 12-byte target, then value (0–128 bytes) | Empty, after application event completion |
 
+Authenticated status includes live `uptime_ms` and the pinned IDF's numeric
+`reset_reason`, sampled with heap counters. Useful reasons are 1 power-on,
+3 software restart, 4 panic, 5 interrupt watchdog, 6 task watchdog, 9 brownout,
+11 USB peripheral reset, 14 power glitch and 15 CPU lockup. These read-only fields
+distinguish a radio disconnect from a device reboot without opening serial or
+changing NVS. They are diagnostic metadata, not a new installation state.
+
 Status offset zero freezes the existing App Manager JSON snapshot in this
 session. Subsequent pages refer to that same snapshot. It contains the same
 application catalog, selected/trial/loaded app, ready/confirmed flags and memory

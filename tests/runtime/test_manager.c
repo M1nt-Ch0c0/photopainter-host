@@ -8,6 +8,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "cJSON.h"
 #include <assert.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -51,6 +52,7 @@ void vTaskDelay(uint32_t ms){usleep(ms*1000);}
 int gpio_config(const gpio_config_t *c){assert(c->pin_bit_mask==(1u<<4)&&c->pull_up_en==1&&c->pull_down_en==0);return 0;}
 int gpio_get_level(int pin){assert(pin==4);return 1;}
 int64_t esp_timer_get_time(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (int64_t)t.tv_sec*1000000+t.tv_nsec/1000;}
+int esp_reset_reason(void){return 15;}
 static app_catalog_t catalog={.selected=-1,.trial_app=-1};
 const app_catalog_t *app_catalog_get(void){return &catalog;}
 module_state_t module_slots_state(void){return (module_state_t){-1,-1,-1,0};}
@@ -106,6 +108,13 @@ int main(void) {
     mock_free_psram=7500000;mock_free_internal=24576;
     app_manager_status(status,sizeof(status));
     assert(strstr(status,"\"free_psram\":7500000") && strstr(status,"\"free_internal_ram\":24576"));
+    cJSON *diagnostics=cJSON_Parse(status);assert(diagnostics);
+    assert(cJSON_GetObjectItemCaseSensitive(diagnostics,"reset_reason")->valuedouble==15);
+    double uptime=cJSON_GetObjectItemCaseSensitive(diagnostics,"uptime_ms")->valuedouble;
+    cJSON_Delete(diagnostics);usleep(5000);app_manager_status(status,sizeof(status));
+    diagnostics=cJSON_Parse(status);assert(diagnostics);
+    assert(cJSON_GetObjectItemCaseSensitive(diagnostics,"uptime_ms")->valuedouble>uptime);
+    cJSON_Delete(diagnostics);
     for(int i=0;i<20;i++)app_manager_network_changed(true);
     usleep(60000);assert(events==0&&!finished);
     allow_finish=1;pthread_join(t,NULL);assert(finished);
