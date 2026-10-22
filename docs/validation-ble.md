@@ -18,6 +18,11 @@ used `3c20e34` (1104144 bytes) and `fcf9d4e` (1104672 bytes, adding read-only
 uptime/reset diagnostics). The latter build identified as `fcf9d4e-dirty` because
 validation notes were being edited; all firmware source was committed.
 The pre-existing ABI 1 photoframe (version 15) and color-test entries were retained.
+The computer executable contains production changes through `dab1adc`; subsequent
+computer commits add validation/tests/docs, with the final hardware probes at
+`655d30a`. The mirrored SDK, BLE echo and application builds use `photoframe`
+commit `d2dd482`. Branches in all four repositories are
+`codex/ble-discovery-app-ota`.
 
 ### Subsequent expiry correction
 
@@ -144,7 +149,8 @@ disconnect, whole-package retransmission, expiry and fragmented ATT writes.
   returned the current reachable push target. The tested Windows executable
   (SHA-256 `7b137c5912fb31bd7c27cd80110f5dd440c5028bd5b4fd72c1dbf543540e3257`)
   replaced the deployed executable after preserving its predecessor; the
-  scheduled service was not started during validation.
+  scheduled service remained stopped through deliberate radio/display tests
+  and was restored after the independent-power comparison below.
 - The 5980-byte ABI 2.1 echo package was installed over BLE and explicitly
   activated/confirmed. Windows verified denied unauthenticated app reads, signed
   echo, direct custom GATT reads/writes, subscribed notifications and rejection
@@ -165,8 +171,8 @@ disconnect, whole-package retransmission, expiry and fragmented ATT writes.
 - Runtime diagnostics recorded unexpected `reset_reason=1` (POWERON) events.
   USB detach/re-enumeration coincided with failed large transfers. Attempts at a
   complete 1 MiB package were interrupted near 85%, 37% and 7%; none reached
-  commit or altered the running version. Full-size sustained OTA reliability is
-  **not yet validated**. Power/USB stability needs investigation; no software
+  commit or altered the running version. These computer-USB runs did not validate
+  sustained full-size OTA. Power/USB stability needed investigation; no software
   panic was captured by the filtered serial reader, which also lost its device.
 - The follow-up on host `40ea296`, with the native Windows USB driver restored,
   passed authentication, replay, duplicate/gap/conflict, hash and HTTP 409 checks
@@ -179,12 +185,77 @@ disconnect, whole-package retransmission, expiry and fragmented ATT writes.
   mappings. It still does not identify whether supply, reset line or another
   hardware condition caused the event. No candidate was committed; the original
   apps remained selected and their versions unchanged.
-- The original automatic pusher/watchdog remains stopped pending power/USB
-  diagnosis. Visual acceptance is now complete. The
+- The original automatic pusher/watchdog was held stopped during power/USB
+  diagnosis. Visual acceptance is complete. The
   user completed the administrator-only unbind operation; native COM55 was
   verified and no forced USBIP binding remains. A different cable and direct
   computer USB port were requested as a physical comparison before another
   sustained transfer.
+
+### Power-path comparison
+
+The user replaced the data cable and moved from USB bus `1-13` to direct port
+`1-12`. Windows still identified the same ESP32-S3 MAC on native COM55, with no
+USBIP binding. With that connection, repeated POWERON events interrupted the
+preliminary transfer checks before the maximum-package phase; the filtered
+serial reader again ended with `SerialException`.
+
+A second comparison closed the serial reader and temporarily disabled **only
+the current power plan's AC USB selective suspend**. Windows reported AC power.
+The upload still failed at 13% (136400 bytes at 76.3 s), and uptime fell from
+136974 to 18831 ms with reason 1. The test runner restored the original AC
+setting in `finally`, and a separate query verified it was enabled again;
+the DC setting was never changed. Thus neither cable/port replacement nor this
+USB power-policy/serial-reader comparison resolved the resets.
+
+The user then moved the device to an independent USB power adapter, disconnected
+it from the computer USB and confirmed that **no battery is installed**. Windows
+reported zero PhotoPainter serial ports. The firmware and 1 MiB package remain
+unchanged for this comparison; BLE performs the upload while authenticated HTTP
+status supplies uptime and heap samples. No PMIC register or radio-power change
+was made. The board's [official schematic](https://files.waveshare.com/wiki/ESP32-S3-PhotoPainter/ESP32-S3-PhotoPainter-Schematic.pdf)
+was reviewed to distinguish the external USB supply, onboard power management
+and reset path; it does not by itself establish which component caused a reset.
+
+**The independent-power comparison passed the full 1 MiB hardware test.**
+All 1048576 bytes were acknowledged in 554.5 seconds (about 9 min 15 s), followed
+by successful SHA/envelope/ELF validation and staging through the existing
+installer. The candidate was explicitly pending, the original running app was
+unchanged, and the test removed the candidate without activation. The complete
+test, including authentication/replay/chunk/error/HTTP 409 checks, took 651.02 s.
+Uptime advanced from 116919 to 696309 ms with no reset; both original application
+entries and their versions remained unchanged.
+
+During reception, internal free RAM stayed near 162 KB and free PSRAM near
+7234356 bytes. After staging and candidate removal, PSRAM returned to 8282800
+bytes through BLE status (8282936 through HTTP after connection cleanup).
+Minimum free internal RAM was 76796 bytes and minimum PSRAM was 6185640 bytes,
+including staging's existing installer allocations. This is one completed
+maximum-size run, not a long-duration endurance claim.
+
+Immediately after the upload, two fresh authenticated Windows discoveries
+completed in 5.2 and 8.7 seconds, returning the reachable device push address.
+Both were inside the unchanged 30-second background-discovery deadline.
+
+The outcome supports using the present independent power arrangement for
+continued operation. It does **not** identify the failing computer port, cable,
+power rail or reset component, and computer-USB stability is not certified.
+
+### Restored deployment
+
+After the maximum-package test and consecutive discovery checks passed, the
+existing `AiQuotaFrame` scheduled task was restarted. Windows reported one
+`ai-quota-frame` service process and its established outbound connection to the
+device's port 80. Authenticated device status then reported the original
+photoframe version 15 selected/loaded, `runtime_ready=true`, `confirmed=true`,
+`display_completed=true`, no pending candidate and no custom test service.
+Uptime was 860569 ms with no additional reset. This verifies restored operation;
+the separately observed HTTP 200 plus human image acceptance remains the
+deliberate six-color display test recorded above. Service logs were not opened.
+
+The current deployment retains independent USB power with no battery. There is
+no computer serial attachment, no new listening port, and the watchdog still
+checks process existence. The user's environment files were not modified.
 
 ## Hardware checklist for remaining cases and future runs
 
