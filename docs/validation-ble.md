@@ -8,15 +8,18 @@ binary at `0x10000`; ROM digests before/after verified that the bootloader,
 partition table, NVS, application slots and activation journal were unchanged by
 those host writes. No provisioning or partition changes were performed.
 
-The currently installed, device-tested host code is `fcf9d4e`; its 1104672-byte image SHA-256 is
-`bef785931472e5c4888f3e9cf042fb0094a6a8e1d06c4dbd36375f7913a320b8`.
-The build identifies as `fcf9d4e-dirty` because these validation notes were still
-being edited; all firmware source changes were committed. Earlier radio tests
-used `3c20e34` (1104144 bytes). The only subsequent firmware change adds read-only
-uptime/reset diagnostics to authenticated status.
+The currently installed host code is `40ea296`; its 1104864-byte image SHA-256 is
+`cbe9c27f88ed4be2f70c46b406d453e307ef23715fa23088522e21c3b9c5c82f`.
+It was written through the restored native Windows COM55 port after checking
+the exact ESP32-S3 MAC and rechecking the full backup hash. Image readback and
+both regions outside factory matched. Filtered boot output identifies `40ea296`;
+the saved network and original application came up normally. Earlier radio tests
+used `3c20e34` (1104144 bytes) and `fcf9d4e` (1104672 bytes, adding read-only
+uptime/reset diagnostics). The latter build identified as `fcf9d4e-dirty` because
+validation notes were being edited; all firmware source was committed.
 The pre-existing ABI 1 photoframe (version 15) and color-test entries were retained.
 
-### Subsequent expiry correction — built, not yet installed
+### Subsequent expiry correction
 
 Code `40ea296` fixes a separate connection-lifetime defect. If a request itself
 noticed idle/total expiry, it cleared the session before the worker's periodic
@@ -28,18 +31,24 @@ transient HCI error.
 
 The native regression failed on the old code at the closed-session assertion
 and passes after the fix; all 86 host tests pass with the real application ELF.
-The candidate binary is 1104864 bytes (+188592 from the fresh baseline), SHA-256
-`cbe9c27f88ed4be2f70c46b406d453e307ef23715fa23088522e21c3b9c5c82f`.
-Static DIRAM remains 145203 bytes. Its runtime heap/physical-disconnect behavior
-still needs device validation. The build uses the pinned IDF and elf_loader;
+The installed binary is 1104864 bytes (+188592 from the fresh baseline).
+Static DIRAM remains 145203 bytes. The build uses the pinned IDF and elf_loader;
 the doctor reports only missing Linux Chrome as a failed prerequisite, which
 does not affect this firmware build.
 
-This candidate has **not** been flashed: the user has a pending manual USB driver
-recovery step, so device writes wait for coordination. A follow-up stage-only
-test on the installed image timed out during discovery before any package bytes
-or mutations were sent. Unexpected POWERON resets remain a separate unresolved
-observation; this protocol fix is not evidence that their cause is resolved.
+The user completed the device-specific Windows USB driver recovery; USBIP is
+unbound and subsequent tests use the native Windows driver. Before this update,
+a follow-up stage-only test timed out during discovery before any package bytes
+or mutations were sent. Unexpected POWERON resets remain a separate observation:
+the user confirmed there was no cable movement, manual reset or restart at those
+times. The protocol correction alone does not establish their cause.
+
+On the native Windows driver, the idle-expiry hardware test observed physical
+disconnection after 59.9 seconds while retaining all client objects. A fresh
+connection authenticated successfully, the 1 MiB receive buffer was freed and
+manager admission could be acquired and aborted again. Uptime increased from
+60459 to 131639 ms with reset reason 11 unchanged (the deliberate serial reset
+for this flash). No application was staged or activated by this test.
 
 ## Local baseline
 
@@ -52,23 +61,22 @@ objects without modifying those local changes.
 
 | Measurement | Baseline | Stage 1 | Installed ABI 2.1 | Installed change |
 |---|---:|---:|---:|---:|
-| Host `.bin`, bytes | 916272 | 1098448 | 1104672 | +188400 |
+| Host `.bin`, bytes | 916272 | 1098448 | 1104864 | +188592 |
 | Static DIRAM used, bytes | 116934 | 142922 | 145203 | +28269 |
 | Linker DIRAM remaining, bytes | 224826 | 198838 | 196557 | -28269 |
-| Runtime free internal RAM, online idle | 234775 | Not measured | 161807 | about -72968 |
-| Runtime free PSRAM, online idle | 8310252 | Not measured | 8282952 | about -27300 |
+| Runtime free internal RAM, online idle | 234775 | Not measured | 161815 | about -72960 |
+| Runtime free PSRAM, online idle | 8310252 | Not measured | 8282936 | about -27316 |
 
 The baseline table uses a fresh defaults build from `5f1eaf5`, with all shared
 configuration values identical to the final build. The initial local-config
 baseline was 919056 bytes (an additional unused RSA/DS option); comparing that
-build gives +185616 bytes. Neither measurement includes the bootloader or apps.
+build gives +185808 bytes. Neither measurement includes the bootloader or apps.
 For baseline heap measurement only, a temporary logging-only build (916464 bytes)
 sampled internal/PSRAM heaps after releasing the status buffer. That instrumentation
 was not committed. Both runtime measurements used the same original ABI 1 app,
 no cached PNG, the same reachable Wi-Fi, and more than 60 seconds after boot.
 The final BLE reading comes from an authenticated HTTP status query after reboot
-into the original app (the inactive echo catalog entry was still present in this
-sample). Small request/log
+into the original app, with the temporary echo catalog entry removed. Small request/log
 allocations mean these deltas describe the observed operating footprint, not an
 isolated allocator accounting of every BLE byte.
 
@@ -146,7 +154,9 @@ disconnect, whole-package retransmission, expiry and fragmented ATT writes.
 - A valid **5242880-byte** six-color PNG returned **HTTP 200 in 50.82 seconds** on
   the original ABI 1 photoframe. Its global selection was confirmed and survived
   the next reboot. The temporary app service is absent and the permanent BLE
-  service remains discoverable. Human confirmation of the image is still pending.
+  service remains discoverable. The user confirmed the expected left-to-right
+  black/white/yellow/red/blue/green bands, upper-left white square, orientation
+  and colors. Physical display acceptance is complete.
   Missing/wrong HTTP tokens returned 401; a deliberately oversized request
   returned 413 and an invalid PNG returned 422. The direct Windows HTTP probes
   did not use a proxy or follow redirects. A header-only test fixture initially
@@ -158,10 +168,23 @@ disconnect, whole-package retransmission, expiry and fragmented ATT writes.
   commit or altered the running version. Full-size sustained OTA reliability is
   **not yet validated**. Power/USB stability needs investigation; no software
   panic was captured by the filtered serial reader, which also lost its device.
-- The original automatic pusher/watchdog remains stopped pending visual/network
-  acceptance and power/USB diagnosis. Restoring the forced Windows USB sharing
-  driver requires administrator rights; the ordinary process received Access
-  Denied and a precise device-specific unbind command was provided to the user.
+- The follow-up on host `40ea296`, with the native Windows USB driver restored,
+  passed authentication, replay, duplicate/gap/conflict, hash and HTTP 409 checks
+  again, but its 1 MiB upload stopped at 41% (last progress 430000 bytes at 232 s).
+  HTTP telemetry went from uptime 418006 ms/reset reason 11 to uptime 10418 ms/
+  reset reason 1. The filtered native serial monitor ended with `SerialException`,
+  without a captured panic, watchdog or brownout message. This rules out a
+  USBIP-only explanation. The fixed IDF maps reason 1 specifically from the ROM
+  power-on reset cause; software, watchdog, brownout and USB resets have separate
+  mappings. It still does not identify whether supply, reset line or another
+  hardware condition caused the event. No candidate was committed; the original
+  apps remained selected and their versions unchanged.
+- The original automatic pusher/watchdog remains stopped pending power/USB
+  diagnosis. Visual acceptance is now complete. The
+  user completed the administrator-only unbind operation; native COM55 was
+  verified and no forced USBIP binding remains. A different cable and direct
+  computer USB port were requested as a physical comparison before another
+  sustained transfer.
 
 ## Hardware checklist for remaining cases and future runs
 
