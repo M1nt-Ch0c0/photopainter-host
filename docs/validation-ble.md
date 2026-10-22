@@ -8,13 +8,38 @@ binary at `0x10000`; ROM digests before/after verified that the bootloader,
 partition table, NVS, application slots and activation journal were unchanged by
 those host writes. No provisioning or partition changes were performed.
 
-The final tested host code is `fcf9d4e`; its 1104672-byte image SHA-256 is
+The currently installed, device-tested host code is `fcf9d4e`; its 1104672-byte image SHA-256 is
 `bef785931472e5c4888f3e9cf042fb0094a6a8e1d06c4dbd36375f7913a320b8`.
 The build identifies as `fcf9d4e-dirty` because these validation notes were still
 being edited; all firmware source changes were committed. Earlier radio tests
 used `3c20e34` (1104144 bytes). The only subsequent firmware change adds read-only
 uptime/reset diagnostics to authenticated status.
 The pre-existing ABI 1 photoframe (version 15) and color-test entries were retained.
+
+### Subsequent expiry correction — built, not yet installed
+
+Code `40ea296` fixes a separate connection-lifetime defect. If a request itself
+noticed idle/total expiry, it cleared the session before the worker's periodic
+check; that check formerly returned false for a closed session and could omit
+physical disconnection. Closed-session detection now remains true until reopen.
+The NimBLE task checks the connection epoch before termination, immediately
+revokes app authentication when closure is scheduled, and allows retry after a
+transient HCI error.
+
+The native regression failed on the old code at the closed-session assertion
+and passes after the fix; all 86 host tests pass with the real application ELF.
+The candidate binary is 1104864 bytes (+188592 from the fresh baseline), SHA-256
+`cbe9c27f88ed4be2f70c46b406d453e307ef23715fa23088522e21c3b9c5c82f`.
+Static DIRAM remains 145203 bytes. Its runtime heap/physical-disconnect behavior
+still needs device validation. The build uses the pinned IDF and elf_loader;
+the doctor reports only missing Linux Chrome as a failed prerequisite, which
+does not affect this firmware build.
+
+This candidate has **not** been flashed: the user has a pending manual USB driver
+recovery step, so device writes wait for coordination. A follow-up stage-only
+test on the installed image timed out during discovery before any package bytes
+or mutations were sent. Unexpected POWERON resets remain a separate unresolved
+observation; this protocol fix is not evidence that their cause is resolved.
 
 ## Local baseline
 
@@ -25,7 +50,7 @@ contained paths from a different checkout. The local IDF had deleted Bluetooth
 controller submodule files; a separate clean checkout was created from its Git
 objects without modifying those local changes.
 
-| Measurement | Baseline | Stage 1 | Including ABI 2.1 | Final change |
+| Measurement | Baseline | Stage 1 | Installed ABI 2.1 | Installed change |
 |---|---:|---:|---:|---:|
 | Host `.bin`, bytes | 916272 | 1098448 | 1104672 | +188400 |
 | Static DIRAM used, bytes | 116934 | 142922 | 145203 | +28269 |
