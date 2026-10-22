@@ -56,7 +56,9 @@ void pp_ble_open(pp_ble_session *s,const pp_ble_ops *ops,const uint8_t id[6],
     memcpy(s->id,id,6);memcpy(s->nonce,nonce,32);
 }
 bool pp_ble_expire(pp_ble_session *s,uint64_t now) {
-    if(!s->ops) return false;
+    /* Closed is a level, not a one-shot event: request handling or a crypto
+     * failure may already have cleared the session before transport polls. */
+    if(!s->ops) return true;
     if(now-s->touched<PP_BLE_IDLE_MS && now-s->started<PP_BLE_SESSION_MS) return false;
     pp_ble_close(s);return true;
 }

@@ -99,6 +99,23 @@ static void test_auth(void) {
     open_session();auth();assert(begin()==0);
     now+=PP_BLE_SESSION_MS;session.touched=now;
     assert(pp_ble_expire(&session,now) && !busy && !allocations);
+    /* A request can notice expiry before the transport's periodic check. The
+     * following check must still request physical disconnect, not lose the
+     * transition because request processing already cleared the session. */
+    for(unsigned total_limit=0;total_limit<2;total_limit++) {
+        open_session();auth();assert(begin()==0 && busy && allocations==1);
+        unsigned released=releases;
+        now+=total_limit?PP_BLE_SESSION_MS:PP_BLE_IDLE_MS;
+        if(total_limit)session.touched=now;
+        uint8_t late[37]={PP_BLE_INFO};pp_ble_put32(late+1,seq+1);
+        pp_ble_tag(client_key,32,"pp-ble-v1/request",late,5,late+5);
+        assert(pp_ble_request(&session,token,info,late,sizeof(late),now,out)==7);
+        assert(out[5]==PP_BLE_EXPIRED && !busy && !allocations && !session.ops);
+        assert(pp_ble_expire(&session,now) && pp_ble_expire(&session,now+1));
+        assert(releases==released+1);
+        open_session();auth();assert(!pp_ble_expire(&session,now));
+    }
+    pp_ble_close(&session);assert(pp_ble_expire(&session,now));
     open_session();auth();session.sequence=UINT32_MAX;seq=UINT32_MAX;
     memset(replay,0,sizeof(replay));replay[0]=PP_BLE_INFO;
     pp_ble_tag(client_key,32,"pp-ble-v1/request",replay,5,replay+5);

@@ -53,6 +53,7 @@ bool pp_ble_tag(const uint8_t *key, size_t key_size, const char *domain,
 void pp_ble_open(pp_ble_session *, const pp_ble_ops *, const uint8_t id[6],
                  const uint8_t nonce[32], uint64_t now);
 void pp_ble_close(pp_ble_session *);
+/* True for a closed/expired session until pp_ble_open; transport must disconnect. */
 bool pp_ble_expire(pp_ble_session *, uint64_t now);
 /* Returns a complete response. Caller serializes calls and owns connection epochs. */
 size_t pp_ble_request(pp_ble_session *, const char *token, const uint8_t info[20],

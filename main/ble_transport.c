@@ -43,6 +43,9 @@ static pp_ble_session *session;
 static char device_token[129];
 static struct ble_npl_event advertise_event;
 static struct ble_npl_event app_event;
+static struct ble_npl_event terminate_event;
+static uint32_t terminate_epoch;
+static uint16_t terminate_connection=BLE_HS_CONN_HANDLE_NONE;
 static ble_uuid128_t app_uuids[5];
 static struct ble_gatt_svc_def app_services[2];
 static struct ble_gatt_chr_def app_characteristics[5];
@@ -55,6 +58,32 @@ static void take(void) {xSemaphoreTake(lock,portMAX_DELAY);}
 static void give(void) {xSemaphoreGive(lock);}
 static uint64_t now_ms(void) {return (uint64_t)esp_timer_get_time()/1000;}
 static int gap_event(struct ble_gap_event *,void *);
+
+static void terminate_expired(struct ble_npl_event *unused) {
+    (void)unused;
+    take();uint16_t conn=terminate_connection;uint32_t expected=terminate_epoch;
+    bool current=epoch==expected && connection==conn && conn!=BLE_HS_CONN_HANDLE_NONE;
+    give();
+    /* GAP callbacks run on this same NimBLE queue, so a handle cannot be
+     * recycled between the epoch check and this command. */
+    if(current && ble_gap_terminate(conn,BLE_ERR_REM_USER_CONN_TERM)) {
+        /* A transient HCI error must not suppress all future close attempts. */
+        take();
+        if(terminate_epoch==expected && terminate_connection==conn)
+            terminate_connection=BLE_HS_CONN_HANDLE_NONE;
+        give();
+    }
+}
+static void schedule_termination(uint32_t expected_epoch,uint16_t conn) {
+    take();
+    if(epoch==expected_epoch && connection==conn && conn!=BLE_HS_CONN_HANDLE_NONE &&
+       (terminate_epoch!=expected_epoch || terminate_connection!=conn)) {
+        authenticated=false;app_ble_connection(false);
+        terminate_epoch=expected_epoch;terminate_connection=conn;
+        ble_npl_eventq_put(nimble_port_get_dflt_eventq(),&terminate_event);
+    }
+    give();
+}
 
 void photopainter_ble_app_changed(void) {
     if(!atomic_load(&started))return;
@@ -278,7 +307,7 @@ static void transport_worker(void *arg) {
             }give();
         }
         if(conn!=BLE_HS_CONN_HANDLE_NONE && pp_ble_expire(session,now_ms()))
-            (void)ble_gap_terminate(conn,BLE_ERR_REM_USER_CONN_TERM);
+            schedule_termination(local_epoch,conn);
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
@@ -311,6 +340,7 @@ esp_err_t photopainter_ble_start(const char *token) {
     ble_svc_gap_init();ble_svc_gatt_init();ble_svc_gap_device_name_set("PhotoPainter");
     ble_npl_event_init(&advertise_event,advertise,NULL);
     ble_npl_event_init(&app_event,app_changed,NULL);
+    ble_npl_event_init(&terminate_event,terminate_expired,NULL);
     ble_hs_cfg.sync_cb=on_sync;ble_hs_cfg.reset_cb=on_reset;
     if(ble_gatts_count_cfg(services) || ble_gatts_add_svcs(services)) return ESP_FAIL;
     if(xTaskCreate(transport_worker,"ble_transfer",6144,NULL,4,NULL)!=pdPASS) return ESP_ERR_NO_MEM;

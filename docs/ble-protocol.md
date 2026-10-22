@@ -108,6 +108,11 @@ and the partially received package. Reconnection supports **whole-package
 retransmission**, not persisted cross-connection resume. This keeps the shared
 installer unchanged and avoids extra Flash wear on partial transfers.
 
+Expiry noticed while handling a request also closes the physical connection.
+The closed indication remains set until a new session opens; the radio task
+checks the connection epoch before termination so a recycled handle cannot close
+a newer peer. Application authentication is revoked when closure is scheduled.
+
 ## Commands and errors
 
 An application ID is 32 bytes: 1–31 lowercase ASCII letters, digits, `_` or `-`,
