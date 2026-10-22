@@ -1,6 +1,7 @@
 #include "wifi_station.h"
 /* Optional observer; the Wi-Fi worker remains independently testable. */
 extern void app_manager_network_changed(bool connected) __attribute__((weak));
+extern void photopainter_ble_network(uint8_t state,uint32_t ip,const char *ssid) __attribute__((weak));
 #include <string.h>
 #include "esp_check.h"
 #include "esp_event.h"
@@ -23,15 +24,21 @@ static wifi_profiles_t saved;
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_STOP)
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_STOP) {
+        if(photopainter_ble_network)photopainter_ble_network(0,0,NULL);
         xEventGroupSetBits(events, STOPPED);
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    }
+    if ((base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) ||
+        (base == IP_EVENT && id == IP_EVENT_STA_LOST_IP)) {
+        if(photopainter_ble_network)photopainter_ble_network(0,0,NULL);
         if(app_manager_network_changed)app_manager_network_changed(false);
         xEventGroupClearBits(events, CONNECTED);
         xEventGroupSetBits(events, DISCONNECTED);
     }
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *event = data;
+        uint32_t ipv4;memcpy(&ipv4,&event->ip_info.ip,sizeof(ipv4));
+        if(photopainter_ble_network)photopainter_ble_network(2,ipv4,NULL);
         ESP_LOGI(TAG, "IPv4: " IPSTR, IP2STR(&event->ip_info.ip));
         if(app_manager_network_changed)app_manager_network_changed(true);
         xEventGroupSetBits(events, CONNECTED);
@@ -44,6 +51,7 @@ static void connect_worker(void *arg)
         for (uint32_t i = 0; i < saved.count; ++i) {
             wifi_config_t station = {0};
             const wifi_profile_t *p = &saved.items[i];
+            if(photopainter_ble_network)photopainter_ble_network(1,0,p->ssid);
             memcpy(station.sta.ssid, p->ssid, strlen(p->ssid));
             memcpy(station.sta.password, p->password, strlen(p->password));
             station.sta.threshold.authmode = p->password[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
@@ -86,7 +94,7 @@ esp_err_t photopainter_wifi_connect(const wifi_profiles_t *profiles)
     ESP_RETURN_ON_ERROR(esp_wifi_init(&init), TAG, "init");
     ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "RAM credentials");
     ESP_RETURN_ON_ERROR(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL), TAG, "Wi-Fi events");
-    ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL), TAG, "IP events");
+    ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL), TAG, "IP events");
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "station mode");
     if (xTaskCreate(connect_worker, "wifi_profiles", 4096, NULL, 5, NULL) != pdPASS) return ESP_ERR_NO_MEM;
     /* HTTP starts immediately; reconnection remains independent of app loading. */

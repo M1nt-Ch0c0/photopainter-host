@@ -14,7 +14,10 @@ void app_manager_status(char *out,size_t size);
 /* Synchronous jobs borrow arguments until return; call with admission held. */
 int app_manager_render(const uint8_t *png,size_t size);
 esp_err_t app_manager_select(const char *id,bool update);
+/* source must remain valid until return (transport uses literal http/ble). */
+esp_err_t app_manager_select_from(const char *id,bool update,const char *source);
 esp_err_t app_manager_rollback(const char *id);
+esp_err_t app_manager_rollback_from(const char *id,const char *source);
 esp_err_t app_manager_stage(const char *id,const uint8_t *data,size_t size);
 esp_err_t app_manager_remove(const char *id);
 esp_err_t app_manager_wifi_read(wifi_profiles_t *out);

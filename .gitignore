@@ -3,6 +3,8 @@
 /sdkconfig
 /sdkconfig.old
 /secrets.env
+/secrets.env.*
+!/secrets.env.example
 /*.nvs.bin
 *.log
 __pycache__/

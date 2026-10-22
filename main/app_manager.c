@@ -20,7 +20,7 @@
 #include <string.h>
 enum {RENDER,SELECT,ROLLBACK,STAGE,REMOVE,WIFI_READ,WIFI_SAVE,NEXT};
 typedef struct {
-    int op;uint32_t generation;const char *id;const void *data;size_t size;bool update;
+    int op;uint32_t generation;const char *id;const char *source;const void *data;size_t size;bool update;
     int *result;SemaphoreHandle_t done;
 } job_t;
 static QueueHandle_t jobs;
@@ -59,6 +59,8 @@ static void update_snapshot(void) {
     cJSON_AddNumberToObject(o,"cache_bytes",app_services_cache_bytes());
     cJSON_AddNumberToObject(o,"free_psram",heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     cJSON_AddNumberToObject(o,"minimum_free_psram",heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
+    cJSON_AddNumberToObject(o,"free_internal_ram",heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+    cJSON_AddNumberToObject(o,"minimum_free_internal_ram",heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
     cJSON *apps=cJSON_AddArrayToObject(o,"apps");
     for(int i=0;c&&i<APP_LIMIT;i++) {
         const app_entry_t *a=&c->apps[i];if(!a->id[0])continue;
@@ -113,8 +115,8 @@ static int next_app(void) {
 static int execute(const job_t *j) {
     switch(j->op) {
     case RENDER:return j->generation==app_runtime_generation()?photoframe_plugin_render(j->data,j->size):APP_ERR_RUNTIME;
-    case SELECT:source="http";snprintf(last_target,sizeof(last_target),"%s",j->id);return photoframe_plugin_select(j->id,j->update);
-    case ROLLBACK:source="http";snprintf(last_target,sizeof(last_target),"%s",j->id);return photoframe_plugin_rollback_app(j->id);
+    case SELECT:source=j->source;snprintf(last_target,sizeof(last_target),"%s",j->id);return photoframe_plugin_select(j->id,j->update);
+    case ROLLBACK:source=j->source;snprintf(last_target,sizeof(last_target),"%s",j->id);return photoframe_plugin_rollback_app(j->id);
     case STAGE:return app_catalog_stage(j->id,j->data,j->size);
     case REMOVE:{int e=app_catalog_remove(app_catalog_find(j->id));if(e==ESP_OK)app_services_drop_cache(j->id);return e;}
     case WIFI_READ:return wifi_sd_load(NULL,false,(wifi_profiles_t *)j->data);
@@ -160,8 +162,10 @@ static int invoke(job_t j) {
     xSemaphoreTake(done,portMAX_DELAY);vSemaphoreDelete(done);return result;
 }
 int app_manager_render(const uint8_t *p,size_t n){return invoke((job_t){.op=RENDER,.generation=app_runtime_generation(),.data=p,.size=n});}
-esp_err_t app_manager_select(const char *id,bool update){return invoke((job_t){.op=SELECT,.id=id,.update=update});}
-esp_err_t app_manager_rollback(const char *id){return invoke((job_t){.op=ROLLBACK,.id=id});}
+esp_err_t app_manager_select_from(const char *id,bool update,const char *from){return invoke((job_t){.op=SELECT,.id=id,.update=update,.source=from});}
+esp_err_t app_manager_rollback_from(const char *id,const char *from){return invoke((job_t){.op=ROLLBACK,.id=id,.source=from});}
+esp_err_t app_manager_select(const char *id,bool update){return app_manager_select_from(id,update,"http");}
+esp_err_t app_manager_rollback(const char *id){return app_manager_rollback_from(id,"http");}
 esp_err_t app_manager_stage(const char *id,const uint8_t *p,size_t n){return invoke((job_t){.op=STAGE,.id=id,.data=p,.size=n});}
 esp_err_t app_manager_remove(const char *id){return invoke((job_t){.op=REMOVE,.id=id});}
 esp_err_t app_manager_wifi_read(wifi_profiles_t *out){return invoke((job_t){.op=WIFI_READ,.data=out});}

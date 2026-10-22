@@ -12,6 +12,9 @@ idf_component_register(
         "app_boot.c"
         "host_abi.c"
         "push_server.c"
+        "ble_protocol.c"
+        "ble_crypto.c"
+        "ble_transport.c"
         "wifi_station.c"
         "wifi_profiles.c"
         "wifi_profiles_json.c"
@@ -19,6 +22,7 @@ idf_component_register(
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         photopainter_board
+        bt
         esp_event
         esp_http_server
         esp_netif
