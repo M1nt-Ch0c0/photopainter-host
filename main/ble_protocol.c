@@ -38,10 +38,22 @@ static bool app_valid(const uint8_t *p) {
     for(;n<32;n++) if(p[n]) return false;
     return true;
 }
+void pp_ble_images_init(pp_ble_images *images,const uint8_t boot[16]) {
+    memset(images,0,sizeof(*images));memcpy(images->boot,boot,16);
+}
+static bool nonzero_id(const uint8_t *p) {
+    unsigned bits=0;for(unsigned i=0;i<16;i++)bits|=p[i];return bits!=0;
+}
+static pp_ble_image_receipt *receipt(pp_ble_images *images,const uint8_t id[16]) {
+    for(unsigned i=0;i<PP_BLE_IMAGE_RECEIPTS;i++)
+        if(images->receipts[i].state && equal(images->receipts[i].id,id,16))return &images->receipts[i];
+    return NULL;
+}
 static void abort_upload(pp_ble_session *s) {
     if(s->package) s->ops->free(s->package);
     s->package=NULL;s->total=s->received=0;
     memset(s->app,0,sizeof(s->app));memset(s->digest,0,sizeof(s->digest));
+    s->image=false;memset(s->image_id,0,sizeof(s->image_id));
     if(s->held) {s->held=false;s->ops->release();}
 }
 void pp_ble_close(pp_ble_session *s) {
@@ -66,6 +78,52 @@ static int operation(pp_ble_session *s,uint8_t op,const uint8_t *p,size_t n,
                      const uint8_t info[20],uint8_t *out,size_t *length) {
     *length=0;
     switch(op) {
+    case PP_BLE_IMAGE_CAPS: {
+        if(n || !s->ops->images || !s->ops->image_ready || !s->ops->render)return PP_BLE_INVALID;
+        out[0]=1;memcpy(out+1,s->ops->images->boot,16);
+        pp_ble_put32(out+17,APP_IMAGE_MAX_BYTES);out[21]=PP_BLE_IMAGE_RECEIPTS;
+        *length=22;return PP_BLE_OK;
+    }
+    case PP_BLE_IMAGE_RESULT: {
+        if(n!=32 || !s->ops->images || !nonzero_id(p+16))return PP_BLE_INVALID;
+        if(!equal(p,s->ops->images->boot,16))return PP_BLE_BOOT_CHANGED;
+        pp_ble_image_receipt *r=receipt(s->ops->images,p+16);
+        memset(out,0,71);*length=71;
+        if(r) {
+            out[0]=r->state;out[1]=(uint8_t)r->result;out[2]=(uint8_t)(r->result>>8);
+            pp_ble_put32(out+3,r->size);memcpy(out+7,r->digest,32);memcpy(out+39,r->app,32);
+        }
+        return PP_BLE_OK;
+    }
+    case PP_BLE_IMAGE_BEGIN: {
+        if(n!=100 || !s->ops->images || !s->ops->image_ready || !s->ops->render ||
+           !nonzero_id(p+16) || !app_valid(p+68))return PP_BLE_INVALID;
+        if(!equal(p,s->ops->images->boot,16))return PP_BLE_BOOT_CHANGED;
+        uint32_t total=pp_ble_u32(p+32);
+        if(total<8 || total>APP_IMAGE_MAX_BYTES)return PP_BLE_INVALID;
+        pp_ble_image_receipt *r=receipt(s->ops->images,p+16);
+        if(r) {
+            if(r->size!=total || !equal(r->digest,p+36,32) || memcmp(r->app,p+68,32))return PP_BLE_STATE;
+            pp_ble_put32(out,r->size);out[4]=r->state;
+            out[5]=(uint8_t)r->result;out[6]=(uint8_t)(r->result>>8);*length=7;
+            return PP_BLE_OK;
+        }
+        if(s->package) {
+            if(!s->image || s->total!=total || !equal(s->image_id,p+16,16) ||
+               !equal(s->digest,p+36,32) || memcmp(s->app,p+68,32))return PP_BLE_STATE;
+        } else {
+            if(!s->ops->acquire())return PP_BLE_BUSY;
+            s->held=true;
+            int ready=s->ops->image_ready((const char *)p+68);
+            if(ready!=PP_BLE_OK){abort_upload(s);return ready;}
+            s->package=s->ops->alloc(total);
+            if(!s->package){abort_upload(s);return PP_BLE_MEMORY;}
+            s->image=true;s->total=total;memcpy(s->image_id,p+16,16);
+            memcpy(s->digest,p+36,32);memcpy(s->app,p+68,32);
+        }
+        pp_ble_put32(out,s->received);out[4]=PP_BLE_IMAGE_UNKNOWN;out[5]=out[6]=0;*length=7;
+        return PP_BLE_OK;
+    }
     case PP_BLE_INFO:
         if(n) return PP_BLE_INVALID;
         memcpy(out,info,20);*length=20;return PP_BLE_OK;
@@ -84,7 +142,7 @@ static int operation(pp_ble_session *s,uint8_t op,const uint8_t *p,size_t n,
         uint32_t total=pp_ble_u32(p);
         if(total<MODULE_HEADER_BYTES+52 || total>MODULE_SLOT_BYTES) return PP_BLE_INVALID;
         if(s->package) {
-            if(s->total!=total || !equal(s->digest,p+4,32) || memcmp(s->app,p+36,32)) return PP_BLE_STATE;
+            if(s->image || s->total!=total || !equal(s->digest,p+4,32) || memcmp(s->app,p+36,32)) return PP_BLE_STATE;
         } else {
             if(!s->ops->acquire()) return PP_BLE_BUSY;
             s->held=true;s->package=s->ops->alloc(total);
@@ -107,8 +165,18 @@ static int operation(pp_ble_session *s,uint8_t op,const uint8_t *p,size_t n,
         if(n) return PP_BLE_INVALID;
         if(!s->package || s->received!=s->total) return PP_BLE_STATE;
         uint8_t digest[32];int result=PP_BLE_HASH;
-        if(pp_ble_sha256(s->package,s->total,digest) && equal(digest,s->digest,32))
-            result=s->ops->stage(s->app,s->package,s->total);
+        if(pp_ble_sha256(s->package,s->total,digest) && equal(digest,s->digest,32)) {
+            if(s->image) {
+                pp_ble_images *images=s->ops->images;
+                pp_ble_image_receipt *r=&images->receipts[images->next++%PP_BLE_IMAGE_RECEIPTS];
+                memset(r,0,sizeof(*r));memcpy(r->id,s->image_id,16);memcpy(r->digest,s->digest,32);
+                memcpy(r->app,s->app,32);r->size=s->total;r->state=PP_BLE_IMAGE_RUNNING;
+                /* Admission and buffer remain owned until the sole manager
+                 * returns, even if GAP disconnects while the panel is busy. */
+                result=s->ops->render(s->package,s->total);
+                r->result=(uint16_t)result;r->state=PP_BLE_IMAGE_COMPLETE;
+            } else result=s->ops->stage(s->app,s->package,s->total);
+        }
         abort_upload(s);return result;
     }
     case PP_BLE_ABORT:

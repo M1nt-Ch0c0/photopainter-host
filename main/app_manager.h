@@ -11,6 +11,8 @@ void app_manager_release(void);
 bool app_manager_busy(void);
 uint32_t app_manager_epoch(void);
 void app_manager_status(char *out,size_t size);
+/* Read-only target check; caller holds admission across reception/render. */
+bool app_manager_target_is_running(const char *id);
 /* Synchronous jobs borrow arguments until return; call with admission held. */
 int app_manager_render(const uint8_t *png,size_t size);
 esp_err_t app_manager_select(const char *id,bool update);

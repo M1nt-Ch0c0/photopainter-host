@@ -3,6 +3,7 @@
 #include "ble_transport.h"
 #include "ble_protocol.h"
 #include "app_manager.h"
+#include "app_runtime.h"
 #include "app_ble.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -40,6 +41,7 @@ static atomic_bool started;
 static uint32_t fragment_target,request_target;
 static pp_ble_fragments fragments;
 static pp_ble_session *session;
+static pp_ble_images image_receipts;
 static char device_token[129];
 static struct ble_npl_event advertise_event;
 static struct ble_npl_event app_event;
@@ -276,8 +278,25 @@ static int app_operation(uint8_t op,const uint8_t *p,size_t n,uint8_t *out,size_
     if(result==PP_BLE_OK && op==PP_BLE_APP_WRITE)result=map_error(app_manager_ble_flush(pp_ble_u32(p)),false);
     return result;
 }
-static const pp_ble_ops operations={app_manager_acquire,app_manager_release,allocate_package,
-    heap_caps_free,stage,manage,app_manager_status,app_operation};
+static int image_ready(const char *id) {
+    return photoframe_plugin_is_ready() && app_manager_target_is_running(id) &&
+        app_runtime_accepts_png()?PP_BLE_OK:PP_BLE_STATE;
+}
+static int render_image(const uint8_t *data,size_t size) {
+    switch(app_manager_render(data,size)) {
+    case PHOTOFRAME_RESULT_OK:return PP_BLE_OK;
+    case PHOTOFRAME_RESULT_ARGUMENT:case PHOTOFRAME_RESULT_PNG:
+    case PHOTOFRAME_RESULT_DIMENSIONS:case PHOTOFRAME_RESULT_COLOR:return PP_BLE_IMAGE_INVALID;
+    case PHOTOFRAME_RESULT_MEMORY:return PP_BLE_MEMORY;
+    case PHOTOFRAME_RESULT_UNAVAILABLE:return PP_BLE_STATE;
+    default:return PP_BLE_DISPLAY_FAILED;
+    }
+}
+static const pp_ble_ops operations={
+    .acquire=app_manager_acquire,.release=app_manager_release,.alloc=allocate_package,
+    .free=heap_caps_free,.stage=stage,.manage=manage,.status=app_manager_status,
+    .app=app_operation,.images=&image_receipts,.image_ready=image_ready,.render=render_image,
+};
 static void transport_worker(void *arg) {
     (void)arg;uint32_t local_epoch=0;
     for(;;) {
@@ -336,6 +355,7 @@ esp_err_t photopainter_ble_start(const char *token) {
     esp_err_t err=esp_read_mac(info+2,ESP_MAC_WIFI_STA);
     if(err!=ESP_OK) return err;
     memcpy(device_token,token,strlen(token)+1);
+    uint8_t boot[16];esp_fill_random(boot,sizeof(boot));pp_ble_images_init(&image_receipts,boot);
     err=nimble_port_init();if(err!=ESP_OK) return err;
     ble_svc_gap_init();ble_svc_gatt_init();ble_svc_gap_device_name_set("PhotoPainter");
     ble_npl_event_init(&advertise_event,advertise,NULL);

@@ -78,7 +78,8 @@ bool app_runtime_ready(void){return true;}
 bool app_runtime_last_display(void){return false;}
 esp_err_t photoframe_plugin_init(void){return 0;}
 int photoframe_plugin_slot(void){return 0;}
-int photoframe_plugin_app(void){return -1;}
+static int loaded_app=-1;
+int photoframe_plugin_app(void){return loaded_app;}
 uint32_t photoframe_plugin_version(void){return 1;}
 bool photoframe_plugin_is_ready(void){return true;}
 esp_err_t photoframe_plugin_select(const char *id,bool u){(void)id;(void)u;return 0;}
@@ -101,6 +102,12 @@ int main(void) {
     for(int i=0;app_manager_busy()&&i<1000;i++)usleep(1000);
     assert(!app_manager_busy());uint32_t e=app_manager_epoch();usleep(120000);
     assert(app_manager_epoch()==e); /* Idle polling must not invalidate every press. */
+    assert(app_manager_acquire());
+    strcpy(catalog.apps[0].id,"photoframe");loaded_app=0;
+    assert(app_manager_target_is_running("photoframe"));
+    assert(!app_manager_target_is_running("color-test") && !app_manager_target_is_running(NULL));
+    loaded_app=APP_LIMIT;assert(!app_manager_target_is_running("photoframe"));
+    loaded_app=-1;memset(catalog.apps[0].id,0,sizeof(catalog.apps[0].id));app_manager_release();
     pthread_t t;assert(!pthread_create(&t,NULL,client,NULL));
     for(int i=0;!inside&&i<1000;i++)usleep(1000);
     assert(inside&&app_manager_busy()&&!app_manager_acquire());

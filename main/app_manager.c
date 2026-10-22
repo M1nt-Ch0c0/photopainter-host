@@ -41,6 +41,10 @@ bool app_manager_acquire(void) {
     atomic_store(&busy,true);atomic_fetch_add(&epoch,1);return true;
 }
 void app_manager_release(void){atomic_store(&busy,false);xSemaphoreGive(admission);}
+bool app_manager_target_is_running(const char *id) {
+    const app_catalog_t *c=app_catalog_get();int running=photoframe_plugin_app();
+    return id && c && running>=0 && running<APP_LIMIT && !strcmp(id,c->apps[running].id);
+}
 void app_manager_network_changed(bool value){atomic_store(&network_value,value);atomic_store(&network_dirty,true);}
 static void update_snapshot(void) {
     const app_catalog_t *c=app_catalog_get();module_state_t state=module_slots_state();

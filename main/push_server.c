@@ -3,6 +3,7 @@
 #include "app_catalog.h"
 #include "app_manager.h"
 #include "app_runtime.h"
+#include "image_limits.h"
 #include "wifi_sd.h"
 #include "wifi_profiles_json.h"
 #include <stdbool.h>
@@ -22,7 +23,7 @@
 #include "freertos/semphr.h"
 #include "photoframe_plugin.h"
 
-#define MAX_PNG_BYTES (5U * 1024U * 1024U)
+#define MAX_PNG_BYTES APP_IMAGE_MAX_BYTES
 #define RECEIVE_DEADLINE_US (30LL * 1000LL * 1000LL)
 #define AUTH_SCHEME "Bearer "
 #define AUTH_SCHEME_LENGTH 7U
@@ -181,11 +182,9 @@ static esp_err_t push_handler(httpd_req_t *request)
     {
         /* Legacy pushers target photoframe; alternate apps require explicit ID. */
         char expected[APP_ID_BYTES] = "photoframe";
-        const app_catalog_t *c = app_catalog_get();
-        int running = photoframe_plugin_app();
         if (app_length >= sizeof(expected) ||
             (app_length && httpd_req_get_hdr_value_str(request, "X-PhotoPainter-App", expected, sizeof(expected)) != ESP_OK) ||
-            !app_id_valid(expected) || !c || running < 0 || strcmp(expected, c->apps[running].id)) {
+            !app_id_valid(expected) || !app_manager_target_is_running(expected)) {
             app_manager_release();
             return send_text(request, "409 Conflict", "requested application is not running\n");
         }

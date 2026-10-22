@@ -34,7 +34,19 @@ static int app(uint8_t op,const uint8_t *p,size_t n,uint8_t *out,size_t *size) {
     assert(busy && (op==PP_BLE_APP_READ || op==PP_BLE_APP_WRITE) && n>=12 && pp_ble_u32(p)==1);
     memcpy(out,"echo",4);*size=4;app_operations++;return 0;
 }
-static const pp_ble_ops ops={acquire,release,allocate,dispose,stage,manage,status,app};
+static pp_ble_images images;
+static unsigned renders;
+static int render_result,ready_result;
+static int image_ready(const char *id) {assert(busy && !strcmp(id,"photoframe"));return ready_result;}
+static int render_image(const uint8_t *p,size_t n) {
+    assert(busy && p && n==sizeof(package));
+    assert(!memcmp(p,package,n));renders++;
+    assert(images.receipts[(images.next-1)%PP_BLE_IMAGE_RECEIPTS].state==PP_BLE_IMAGE_RUNNING);
+    return render_result;
+}
+static const pp_ble_ops ops={.acquire=acquire,.release=release,.alloc=allocate,.free=dispose,
+    .stage=stage,.manage=manage,.status=status,.app=app,.images=&images,
+    .image_ready=image_ready,.render=render_image};
 static pp_ble_session session;
 static uint8_t client_key[32],out[512];
 static uint32_t seq;
@@ -174,9 +186,62 @@ static void test_fragments(void) {
     p[0]=0;p[2]=1;p[3]=2;assert(pp_ble_fragment(&f,p,7)==-1); /* 513 */
     assert(pp_ble_fragment(&f,p,4)==-1);
 }
+static void test_images(void) {
+    uint8_t boot[16]={42};pp_ble_images_init(&images,boot);
+    uint8_t p[100]={0};memcpy(p,boot,16);p[16]=1;pp_ble_put32(p+32,sizeof(package));
+    pp_ble_sha256(package,sizeof(package),p+36);memcpy(p+68,"photoframe",11);
+    open_session();auth();
+    assert(request(PP_BLE_IMAGE_CAPS,NULL,0)==0 && response_size==61);
+    assert(out[7]==1 && !memcmp(out+8,boot,16) && pp_ble_u32(out+24)==APP_IMAGE_MAX_BYTES);
+    assert(request(PP_BLE_IMAGE_RESULT,p,32)==0 && out[7]==PP_BLE_IMAGE_UNKNOWN);
+    busy=true;assert(request(PP_BLE_IMAGE_BEGIN,p,100)==PP_BLE_BUSY);busy=false;
+    ready_result=PP_BLE_STATE;assert(request(PP_BLE_IMAGE_BEGIN,p,100)==PP_BLE_STATE && !busy);
+    ready_result=0;oom=true;assert(request(PP_BLE_IMAGE_BEGIN,p,100)==PP_BLE_MEMORY && !busy);oom=false;
+    assert(request(PP_BLE_IMAGE_BEGIN,p,100)==0 && busy && session.image);
+    assert(begin()==PP_BLE_STATE); /* Never interpret a PNG receive as an ELF upload. */
+    assert(request(PP_BLE_IMAGE_BEGIN,p,100)==0 && allocations==1);
+    assert(request(PP_BLE_COMMIT,NULL,0)==PP_BLE_STATE && !renders);
+    fill();session.package[0]^=1;
+    assert(request(PP_BLE_COMMIT,NULL,0)==PP_BLE_HASH && !renders && !busy);
+    assert(request(PP_BLE_IMAGE_RESULT,p,32)==0 && out[7]==PP_BLE_IMAGE_UNKNOWN);
+    assert(request(PP_BLE_IMAGE_BEGIN,p,100)==0);fill();
+    assert(request(PP_BLE_COMMIT,NULL,0)==0 && renders==1 && !busy && !allocations);
+    /* Lost commit reply: a fresh authenticated connection reads the receipt.
+     * A repeated BEGIN returns completion without admission/allocation/render. */
+    open_session();auth();assert(request(PP_BLE_IMAGE_RESULT,p,32)==0);
+    assert(out[7]==PP_BLE_IMAGE_COMPLETE && out[8]==0 && pp_ble_u32(out+10)==sizeof(package));
+    assert(!memcmp(out+14,p+36,32) && !memcmp(out+46,p+68,32));
+    busy=true;assert(request(PP_BLE_IMAGE_BEGIN,p,100)==0 && out[11]==PP_BLE_IMAGE_COMPLETE);
+    assert(renders==1 && !allocations);busy=false;
+    p[36]^=1;assert(request(PP_BLE_IMAGE_BEGIN,p,100)==PP_BLE_STATE);p[36]^=1;
+    p[16]=2;render_result=PP_BLE_DISPLAY_FAILED;
+    assert(request(PP_BLE_IMAGE_BEGIN,p,100)==0);fill();
+    assert(request(PP_BLE_COMMIT,NULL,0)==PP_BLE_DISPLAY_FAILED && renders==2 && !busy);
+    open_session();auth();assert(request(PP_BLE_IMAGE_RESULT,p,32)==0 && out[8]==PP_BLE_DISPLAY_FAILED);
+    assert(request(PP_BLE_IMAGE_BEGIN,p,100)==0 && renders==2 && !allocations);
+    render_result=0;
+    p[16]=3;assert(request(PP_BLE_IMAGE_BEGIN,p,100)==0);pp_ble_close(&session);
+    assert(!busy && !allocations);open_session();auth();
+    assert(request(PP_BLE_IMAGE_RESULT,p,32)==0 && out[7]==PP_BLE_IMAGE_UNKNOWN);
+    pp_ble_put32(p+32,APP_IMAGE_MAX_BYTES+1);assert(request(PP_BLE_IMAGE_BEGIN,p,100)==PP_BLE_INVALID);
+    pp_ble_put32(p+32,APP_IMAGE_MAX_BYTES);assert(request(PP_BLE_IMAGE_BEGIN,p,100)==0);
+    assert(request(PP_BLE_ABORT,NULL,0)==0 && !busy && !allocations);
+    pp_ble_put32(p+32,7);assert(request(PP_BLE_IMAGE_BEGIN,p,100)==PP_BLE_INVALID);
+    pp_ble_put32(p+32,sizeof(package));p[16]=0;assert(request(PP_BLE_IMAGE_BEGIN,p,100)==PP_BLE_INVALID);
+    p[16]=3;p[0]^=1;
+    assert(request(PP_BLE_IMAGE_BEGIN,p,100)==PP_BLE_BOOT_CHANGED);
+    assert(request(PP_BLE_IMAGE_RESULT,p,32)==PP_BLE_BOOT_CHANGED);p[0]^=1;
+    for(unsigned id=3;id<3+PP_BLE_IMAGE_RECEIPTS;id++) {
+        p[16]=(uint8_t)id;assert(request(PP_BLE_IMAGE_BEGIN,p,100)==0);fill();
+        assert(request(PP_BLE_COMMIT,NULL,0)==0);
+    }
+    p[16]=1;assert(request(PP_BLE_IMAGE_RESULT,p,32)==0 && out[7]==PP_BLE_IMAGE_UNKNOWN);
+    boot[0]++;pp_ble_images_init(&images,boot);
+    assert(request(PP_BLE_IMAGE_RESULT,p,32)==PP_BLE_BOOT_CHANGED && !busy && !allocations);
+}
 int main(void) {
     for(size_t i=0;i<sizeof(package);i++) package[i]=(uint8_t)i;
-    test_auth();test_transfer();test_status_and_bounds();test_fragments();
+    test_auth();test_transfer();test_status_and_bounds();test_fragments();test_images();
     pp_ble_close(&session);assert(!busy && !allocations && releases>5);
     return 0;
 }
