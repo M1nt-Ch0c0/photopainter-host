@@ -13,6 +13,7 @@ bool pp_ble_hmac(const uint8_t *k,size_t kn,const uint8_t *p,size_t n,uint8_t ou
 }
 static bool busy,oom;
 static unsigned stages,managed,allocations,releases;
+static unsigned app_operations;
 static int stage_result;
 static uint8_t package[5000],info[20]={1,2,0,1,2,3,4,5,192,168,1,42};
 static const char token[]="0123456789abcdef0123456789abcdef";
@@ -29,7 +30,11 @@ static int manage(uint8_t op,const char *id) {
     managed++;return PP_BLE_OK;
 }
 static void status(char *p,size_t n) {assert(n>=4096);memset(p,'x',1050);p[1050]=0;}
-static const pp_ble_ops ops={acquire,release,allocate,dispose,stage,manage,status};
+static int app(uint8_t op,const uint8_t *p,size_t n,uint8_t *out,size_t *size) {
+    assert(busy && (op==PP_BLE_APP_READ || op==PP_BLE_APP_WRITE) && n>=12 && pp_ble_u32(p)==1);
+    memcpy(out,"echo",4);*size=4;app_operations++;return 0;
+}
+static const pp_ble_ops ops={acquire,release,allocate,dispose,stage,manage,status,app};
 static pp_ble_session session;
 static uint8_t client_key[32],out[512];
 static uint32_t seq;
@@ -91,6 +96,9 @@ static void test_auth(void) {
     open_session();assert(pp_ble_request(&session,token,info,replay,sizeof(replay),now,out)==7);
     auth();assert(begin()==0 && busy);
     now+=PP_BLE_IDLE_MS;assert(pp_ble_expire(&session,now));assert(!busy && !allocations);
+    open_session();auth();assert(begin()==0);
+    now+=PP_BLE_SESSION_MS;session.touched=now;
+    assert(pp_ble_expire(&session,now) && !busy && !allocations);
     open_session();auth();session.sequence=UINT32_MAX;seq=UINT32_MAX;
     memset(replay,0,sizeof(replay));replay[0]=PP_BLE_INFO;
     pp_ble_tag(client_key,32,"pp-ble-v1/request",replay,5,replay+5);
@@ -130,6 +138,13 @@ static void test_status_and_bounds(void) {
     assert(request(PP_BLE_BEGIN,p,68)==PP_BLE_INVALID && !busy);
     pp_ble_put32(p,5000);memset(p+36,'a',32);assert(request(PP_BLE_BEGIN,p,68)==PP_BLE_INVALID);
     assert(request(255,NULL,0)==PP_BLE_INVALID);
+    memset(p,0,sizeof(p));pp_ble_put32(p,1);
+    busy=true;assert(request(PP_BLE_APP_READ,p,12)==PP_BLE_BUSY && !app_operations);busy=false;
+    assert(request(PP_BLE_APP_READ,p,11)==PP_BLE_INVALID && !app_operations);
+    assert(request(PP_BLE_APP_READ,p,12)==0 && app_operations==1 && !busy && response_size==43);
+    assert(request(PP_BLE_APP_WRITE,p,13)==0 && app_operations==2 && !busy);
+    assert(begin()==0);assert(request(PP_BLE_APP_WRITE,p,13)==PP_BLE_BUSY && app_operations==2);
+    assert(request(PP_BLE_ABORT,NULL,0)==0);
 }
 static void test_fragments(void) {
     pp_ble_fragments f={0};uint8_t p[20]={0,0,35,0};memset(p+4,0xa5,16);

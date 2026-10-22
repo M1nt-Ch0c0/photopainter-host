@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: MIT
- * PhotoPainter application ABI 2.0. Canonical source: photopainter-host/sdk.
+ * PhotoPainter application ABI 2.1. Canonical source: photopainter-host/sdk.
  * Plain ELF32 C ABI; no ESP-IDF types or application callbacks cross this ABI.
  */
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
 #define APP_ABI_MAJOR 2u
-#define APP_ABI_MINOR 0u
+#define APP_ABI_MINOR 1u
 #define APP_MANIFEST_MAGIC 0x32505041u
 #define APP_FRAME_WIDTH 800u
 #define APP_FRAME_HEIGHT 480u
@@ -18,6 +18,7 @@
 #define APP_EVENT_TIMER 3u
 #define APP_EVENT_NETWORK 4u
 #define APP_EVENT_STOP 5u
+#define APP_EVENT_BLE 6u
 #define APP_READY 1u
 #define APP_OK 0
 #define APP_ERR_ARGUMENT (-1)
@@ -51,6 +52,10 @@ _Static_assert(sizeof(app_manifest_v2_t)==128,"manifest ABI");
 #define APP_MANIFEST(ID, NAME, INPUTS, FLAGS) \
     __attribute__((used,visibility("default"),section(APP_MANIFEST_SECTION),aligned(4))) \
     const app_manifest_v2_t app_manifest = {APP_MANIFEST_MAGIC,128,2,0,INPUTS,FLAGS,ID,NAME,{0,0}}
+/* Opt in to BLE imports/events. Existing APP_MANIFEST stays at ABI 2.0. */
+#define APP_MANIFEST_BLE(ID, NAME, INPUTS, FLAGS) \
+    __attribute__((used,visibility("default"),section(APP_MANIFEST_SECTION),aligned(4))) \
+    const app_manifest_v2_t app_manifest = {APP_MANIFEST_MAGIC,128,2,1,INPUTS,FLAGS,ID,NAME,{0,0}}
 typedef struct {
     uint32_t size, abi_major, abi_minor, event, event_id, generation;
     uint32_t input_type, data_size;
@@ -78,6 +83,42 @@ int32_t app_host_timer_v2(uint32_t timer_id, uint32_t interval_ms);
 uint64_t app_host_monotonic_ms_v2(void);
 /* Unix seconds, zero if wall clock has not been set to a plausible date. */
 uint64_t app_host_wall_time_v2(void);
+
+/* ABI 2.1: one service and at most four characteristics, copied into host RAM.
+ * UUID bytes are in conventional printed order, not NimBLE's reversed order.
+ * No ELF callback pointers are retained. BLE events use context.data/data_size.
+ * Services and queued events are cancelled before unloading the application.
+ * Discovery/management UUIDs and Bluetooth SIG UUIDs are reserved to the host. */
+#define APP_BLE_MAX_CHARACTERISTICS 4u
+#define APP_BLE_MAX_VALUE 128u
+#define APP_BLE_READ 1u
+#define APP_BLE_WRITE 2u
+#define APP_BLE_NOTIFY 4u
+#define APP_BLE_CONNECTED 1u
+#define APP_BLE_DISCONNECTED 2u
+#define APP_BLE_WRITTEN 3u
+#define APP_BLE_ERROR 4u
+typedef struct {
+    uint8_t uuid[16];
+    uint32_t properties, max_bytes;
+} app_ble_characteristic_v2_t;
+typedef struct {
+    uint32_t size, count;
+    uint8_t uuid[16];
+    app_ble_characteristic_v2_t characteristics[APP_BLE_MAX_CHARACTERISTICS];
+} app_ble_service_v2_t;
+typedef struct {
+    uint32_t type, characteristic, data_size;
+    uint8_t data[APP_BLE_MAX_VALUE];
+} app_ble_event_v2_t;
+_Static_assert(sizeof(app_ble_service_v2_t)==120,"BLE service ABI");
+_Static_assert(sizeof(app_ble_event_v2_t)==140,"BLE event ABI");
+/* Register once per active lifetime (unregister permits registering again).
+ * Publication is asynchronous; APP_BLE_ERROR reports a radio registration error.
+ * A CONNECTED event means an authenticated host session, not an anonymous link. */
+int32_t app_host_ble_register_v2(const app_ble_service_v2_t *service);
+int32_t app_host_ble_set_v2(uint32_t characteristic,const uint8_t *data,uint32_t bytes);
+int32_t app_host_ble_unregister_v2(void);
 static inline void app_complete(const app_context_v2_t *c,int32_t status,uint32_t flags) {
     app_result_v2_t r={sizeof(r),c->event_id,c->generation,status,flags};
     app_host_complete_v2(&r);

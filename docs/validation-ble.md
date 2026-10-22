@@ -1,7 +1,10 @@
 # BLE validation record
 
-Hardware has not been accessed: no serial connection, flashing, provisioning,
-BLE scan/connection or physical push is part of these development checks.
+The initial development checks used no hardware. The user subsequently authorized
+device testing in this session. A native Windows adapter scan has completed
+successfully (no PhotoPainter advertisement from the old firmware); ESP USB
+identity has been confirmed after reconnect. Full Flash backup and device-level
+checks are in progress. No host flash or provisioning has been performed yet.
 
 ## Local baseline
 
@@ -12,13 +15,13 @@ contained paths from a different checkout. The local IDF had deleted Bluetooth
 controller submodule files; a separate clean checkout was created from its Git
 objects without modifying those local changes.
 
-| Measurement | Baseline | Stage 1 | Change |
-|---|---:|---:|---:|
-| Host `.bin`, bytes | 919056 | 1098448 | +179392 |
-| Static DIRAM used, bytes | 116934 | 142922 | +25988 |
-| Linker DIRAM remaining, bytes | 224826 | 198838 | -25988 |
-| Runtime free internal RAM | Not measured | Not measured | Requires hardware |
-| Runtime free PSRAM | Not measured | Not measured | Requires hardware |
+| Measurement | Baseline | Stage 1 | Including ABI 2.1 | Final change |
+|---|---:|---:|---:|---:|
+| Host `.bin`, bytes | 919056 | 1098448 | 1104144 | +185088 |
+| Static DIRAM used, bytes | 116934 | 142922 | 145050 | +28116 |
+| Linker DIRAM remaining, bytes | 224826 | 198838 | 196710 | -28116 |
+| Runtime free internal RAM | Not measured | Not measured | Pending device test | Not yet known |
+| Runtime free PSRAM | Not measured | Not measured | Pending device test | Not yet known |
 
 Linker remaining space is **not free runtime heap**. NimBLE/controller tasks,
 PSRAM pools, loaded ELF and caches allocate at runtime. Read `free_internal_ram`,
@@ -26,6 +29,8 @@ PSRAM pools, loaded ELF and caches allocate at runtime. Read `free_internal_ram`
 from authenticated status at comparable boot/idle/upload/display points to
 measure the actual changes. Baseline firmware did not expose internal heap;
 capture an authorized baseline instrumented build if that comparison is needed.
+Heap counters are sampled at status-query time, so a BLE receive buffer is
+observable even though the manager has not yet executed a stage job.
 
 The baseline Python suite ran 81 tests (one optional application ELF case skipped).
 The new protocol suite tests actual C with ASan/UBSan: independent HMAC vectors,
@@ -33,6 +38,24 @@ wrong/absent token, tampering, replay, sequence exhaustion, unauthenticated comm
 busy/OOM, begin/repeat begin, duplicate/conflicting/out-of-order chunks, bounds,
 truncated commit, package SHA, progress, explicit activation, manager error,
 disconnect, whole-package retransmission, expiry and fragmented ATT writes.
+
+## Completed local checks
+
+- Host: 86 tests pass with the real `photoframe.app.elf` integration enabled,
+  including catalog/boot recovery, ABI 1/2.0/2.1 dispatch, copied BLE resources,
+  bounded queues, manager admission, synchronous app writes and unload cleanup.
+- `photoframe`: PNG native test and actual BLE echo entry test pass; default
+  `.app.elf`, legacy `.so` and `ble_echo.app.elf` build with the pinned IDF and
+  unmodified Registry elf_loader 1.3.3. The echo ELF is 1884 bytes; package is
+  5980 bytes. Header and import-list SDK copies compare byte-for-byte.
+- Computer: Go 1.26.0 `make check` passes (unit/race/vet/static build), including
+  shared HMAC vectors, transfer and retry behavior, application generation
+  binding and scan cancellation. Windows amd64 cross-build succeeds. A macOS
+  arm64 CGO-disabled HTTP-only fallback build succeeds; native macOS BLE still
+  requires a macOS CGO build and radio validation. Chrome-specific tests skip
+  when Chrome is unavailable in the Linux build environment.
+- `partitions.csv`, generated partition-table bytes, `dependencies.lock`, the
+  existing HTTP server and slot installer are unchanged from the baseline.
 
 ## Hardware checklist — needs separate authorization
 
@@ -64,3 +87,8 @@ disconnect, whole-package retransmission, expiry and fragmented ATT writes.
 10. Record the four heap statistics at idle, during upload, after disconnect,
     while an ELF/cache is loaded and after a 5 MiB HTTP reception. Repeat combined
     Wi-Fi traffic/BLE operations to check coexistence, stack margins and leaks.
+11. Install/activate `ble-echo`, write/read `hello`, check notification subscription,
+    disconnect/reconnect, then switch away and confirm its GATT service and old
+    generation no longer work. Permanent discovery/upload must remain available.
+    Repeat switches to look for dynamic GATT/resource leaks; try unauthorized,
+    oversized and stale-revision writes and verify no application invocation.

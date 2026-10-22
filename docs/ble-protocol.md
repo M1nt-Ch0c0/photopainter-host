@@ -99,7 +99,9 @@ Unsigned responses must never be accepted as success or evidence of identity.
 A MAC/sequence/transport failure ends the client session. Do not retry an old
 signed command on a fresh connection. Query state after an ambiguous activation.
 
-Sessions expire after 60 seconds without a valid command, or 30 minutes total.
+Sessions expire after 60 seconds without a valid command, or two hours total.
+The total cap accommodates a 1 MiB package at minimum MTU with acknowledged writes;
+it is not a throughput guarantee. The computer's install deadline is 90 minutes.
 An in-flight App Manager operation retains its data and finishes before cleanup;
 the idle timer resumes after the operation. Disconnect discards authentication
 and the partially received package. Reconnection supports **whole-package
@@ -125,6 +127,8 @@ then NUL padding. Package bytes are exactly `tools/module.py package` output.
 | 10 | Switch to confirmed active | `app_id:32` | Empty |
 | 11 | Roll back | `app_id:32` | Empty |
 | 12 | Remove | `app_id:32` | Empty |
+| 13 | Application characteristic read (ABI 2.1) | `generation:u32, service_revision:u32, index:u32` | Value, at most 128 bytes |
+| 14 | Application characteristic write (ABI 2.1) | Same 12-byte target, then value (0–128 bytes) | Empty, after application event completion |
 
 Status offset zero freezes the existing App Manager JSON snapshot in this
 session. Subsequent pages refer to that same snapshot. It contains the same
@@ -192,3 +196,58 @@ PSA HMAC/SHA. The catalog/runtime recovery tests remain authoritative for A/B.
 Reference APIs: [ESP-IDF NimBLE](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/bluetooth/nimble/index.html),
 [Go Bluetooth](https://github.com/tinygo-org/bluetooth), and
 [Windows Runtime thread cleanup](https://learn.microsoft.com/en-us/windows/win32/api/roapi/nf-roapi-rouninitialize).
+
+## Application BLE service (ABI 2.1)
+
+The optional application surface is included in this implementation. It adds
+three allowlisted imports: `app_host_ble_register_v2`, `app_host_ble_set_v2`,
+`app_host_ble_unregister_v2`. `APP_MANIFEST_BLE` declares minor version 1.
+The ordinary `APP_MANIFEST` macro still declares minor 0. Both validators reject
+BLE imports in a minor-0 package and reject unknown minor versions. The original
+context/result/manifest layouts remain 44/20/128 bytes on ELF32; each application's
+context reports its declared minor version. ABI 1 and ABI 2.0 still work.
+
+An active app may register one custom 128-bit service with up to four custom
+characteristics. Each value is bounded to 128 bytes; properties are READ, WRITE,
+and optional NOTIFY (which also requires READ). UUID arrays in the SDK are in
+printed byte order. The host reserves the `7b9d` namespace and Bluetooth SIG
+base UUID namespace, rejects duplicate UUIDs and copies the entire descriptor
+and values into host RAM. No application pointer or callback is retained.
+
+Register returns after validation/copy. Publication occurs on the NimBLE task,
+including when the app START precedes BLE startup. `APP_BLE_ERROR` reports a
+publication failure through the manager. Dynamic GATT services use NimBLE's
+add/delete service API; built-in discovery/upload services are never removed.
+The host reports Service Changed when the dynamic database changes. On STOP or
+any unload/failure, app state and queued events are invalidated **before ELF
+deallocation**; NimBLE removes the old service on its task. During that short
+handoff, stale accesses already fail the revision check. RAM contains host copies
+only, so neither old callbacks nor old BLE data can enter the next ELF.
+
+`APP_EVENT_BLE` (6) carries a 140-byte `app_ble_event_v2_t` through the existing
+borrowed context data pointer. Event types are authenticated CONNECTED,
+DISCONNECTED, WRITTEN and ERROR. Anonymous connections produce no app events.
+Connection boundaries coalesce undelivered events and discard the disconnected
+peer's queued writes. At most eight events are buffered. The manager delivers
+them only with shared admission held. A successful signed write waits for the
+application's event result; a disconnect does not cancel an already executing
+application event. The normal watchdog/display budgets still apply.
+
+Read status to obtain `generation`, `ble_service_revision`,
+`ble_characteristics` and `ble_service_uuid`. Ops 13/14 must name that generation,
+revision and index; a switch or unregister/register invalidates the target.
+Both commands require the same HMAC session and shared admission as management.
+The computer CLI also checks the requested application ID matches `loaded_app`.
+
+A custom characteristic's direct GATT WRITE accepts the identical fragmented
+signed op-14 frame as Request; its index must match that characteristic. The
+response still comes from the permanent Response characteristic. Direct GATT
+READ requires an authenticated session and returns the current value. NOTIFY
+also requires authentication and sends at most `MTU-3` bytes. These direct reads
+and notifications are unencrypted, advisory values without protocol HMAC tags;
+use **op 13**, as the provided CLI does, for an authenticated complete read.
+Subscribe/read permissions never grant upload/activation permission on their own.
+
+The minimal `photoframe/examples/ble-echo` app demonstrates START registration,
+an authenticated write event, copied read/notify values and STOP cleanup. It has
+no display requirement and does not draw on the panel.

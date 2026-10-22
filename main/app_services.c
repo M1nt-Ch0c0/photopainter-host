@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "app_services.h"
+#include "app_ble.h"
 #include "photopainter_board.h"
 #include "esp_timer.h"
 #include "esp_system.h"
@@ -35,8 +36,9 @@ esp_err_t app_services_init(void) {
 void app_services_open(const char *id,uint32_t gen) {
     strncpy(current,id,sizeof(current)-1);current[sizeof(current)-1]=0;
     generation=gen;timer_interval=0;context=NULL;
+    app_ble_bind(gen);
 }
-void app_services_close(void) {timer_interval=0;context=NULL;current[0]=0;}
+void app_services_close(void) {app_ble_cancel();timer_interval=0;context=NULL;current[0]=0;}
 esp_err_t app_services_begin(const app_context_v2_t *c) {
     if(context||!c||c->generation!=generation)return ESP_ERR_INVALID_STATE;
     displayed=display_called=borrowed=false;
@@ -107,3 +109,14 @@ bool app_services_timer_due(uint32_t *id) {
 }
 void app_services_network(bool value){connected=value;}
 bool app_services_connected(void){return connected;}
+int32_t app_host_ble_register_v2(const app_ble_service_v2_t *service) {
+    if(!active() || context->event==APP_EVENT_STOP)return APP_ERR_RUNTIME;
+    return app_ble_register(generation,service);
+}
+int32_t app_host_ble_set_v2(uint32_t index,const uint8_t *data,uint32_t size) {
+    if(!active() || context->event==APP_EVENT_STOP)return APP_ERR_RUNTIME;
+    return app_ble_set(generation,index,data,size);
+}
+int32_t app_host_ble_unregister_v2(void) {
+    return active()?app_ble_unregister(generation):APP_ERR_RUNTIME;
+}

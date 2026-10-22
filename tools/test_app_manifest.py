@@ -29,7 +29,7 @@ class ManifestTests(unittest.TestCase):
     def test_unknown_abi_capabilities_reserved_and_nonterminated_strings(self):
         p=minimal_elf("clock");off=struct.unpack_from("<I",p,32)[0]
         m=struct.unpack_from("<I",p,off+6*40+16)[0]
-        cases=[(0,0),(4,127),(8,3),(12,1),(16,2),(20,2),(120,1),(124,1)]
+        cases=[(0,0),(4,127),(8,3),(12,2),(16,2),(20,2),(120,1),(124,1)]
         for offset,value in cases:
             b=bytearray(p);struct.pack_into("<I",b,m+offset,value)
             self.assertFalse(self.valid(bytes(b)))
@@ -54,3 +54,16 @@ class ManifestTests(unittest.TestCase):
         p=minimal_elf("clock")
         for end in range(len(p)):
             self.assertFalse(self.valid(p[:end]))
+
+    def test_ble_imports_require_minor_one_and_old_apps_stay_valid(self):
+        for symbol in ("app_host_ble_register_v2","app_host_ble_set_v2","app_host_ble_unregister_v2"):
+            p=minimal_elf("ble-echo",imports=symbol)
+            self.assertFalse(self.valid(p))
+            with self.assertRaises(ValueError):manifest(p)
+            b=bytearray(p);off=struct.unpack_from("<I",b,32)[0]
+            m=struct.unpack_from("<I",b,off+6*40+16)[0]
+            struct.pack_into("<I",b,m+12,1)
+            self.assertTrue(self.valid(bytes(b)))
+            self.assertEqual(manifest(bytes(b))["minor"],1)
+            self.assertEqual(struct.unpack_from("<II",package_elf(bytes(b),1),4),(2,2))
+        self.assertTrue(self.valid(minimal_elf("old-app",imports="app_host_timer_v2")))

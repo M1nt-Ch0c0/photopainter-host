@@ -22,4 +22,7 @@ esp_err_t app_manager_stage(const char *id,const uint8_t *data,size_t size);
 esp_err_t app_manager_remove(const char *id);
 esp_err_t app_manager_wifi_read(wifi_profiles_t *out);
 esp_err_t app_manager_wifi_save(const wifi_profiles_t *in);
+/* Execute queued BLE boundary/write events with admission held; keeps the
+ * transport response pending until the application's write event completes. */
+esp_err_t app_manager_ble_flush(uint32_t generation);
 void app_manager_network_changed(bool connected);

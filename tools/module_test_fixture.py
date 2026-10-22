@@ -3,7 +3,7 @@
 import struct
 
 
-def minimal_elf(app=None, flags=0, imports=""):
+def minimal_elf(app=None, flags=0, imports="", minor=0):
     """Optional ABI 2 manifest; payload is structural, never executable."""
     data = bytearray(52)
     data[:7] = b"\x7fELF\x01\x01\x01"
@@ -47,7 +47,7 @@ def minimal_elf(app=None, flags=0, imports=""):
     section(b".shstrtab", 3, 0, 0, names)
     if app:
         section(b".app_manifest",1,2,0x2000,struct.pack("<6I32s64s2I",
-            0x32505041,128,2,0,1,flags,app.encode(),b"Test application",0,0))
+            0x32505041,128,2,minor,1,flags,app.encode(),b"Test application",0,0))
     while len(data) % 4:
         data.append(0)
     section_offset = len(data)

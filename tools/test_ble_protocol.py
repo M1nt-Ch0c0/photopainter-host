@@ -11,10 +11,13 @@ class BLEProtocolTests(unittest.TestCase):
     def test_auth_transfer_replay_lifetime_and_framing(self):
         with tempfile.TemporaryDirectory() as directory:
             binary = Path(directory) / "ble-protocol"
+            flags=[]
+            ssl=Path("/opt/homebrew/opt/openssl@3")
+            if ssl.exists(): flags=["-I"+str(ssl/"include"),"-L"+str(ssl/"lib")]
             subprocess.run([
                 "cc", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
                 "-g", "-I" + str(ROOT / "main"),
                 str(ROOT / "main/ble_protocol.c"),
                 str(ROOT / "tests/ble/test_protocol.c"), "-lcrypto", "-o", str(binary),
-            ], check=True)
+            ]+flags, check=True)
             subprocess.run([str(binary)], check=True)

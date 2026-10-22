@@ -7,6 +7,7 @@ idf_component_register(
         "module_format.c"
         "app_manifest.c"
         "app_services.c"
+        "app_ble.c"
         "app_manager.c"
         "app_button.c"
         "app_boot.c"

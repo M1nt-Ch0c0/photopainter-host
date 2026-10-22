@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 static int64_t now;static uint64_t deadline;static int displays,restarts,result;
+void photopainter_ble_app_changed(void){}
 static void (*watchdog)(void *);
 int64_t esp_timer_get_time(void){return now;}
 esp_err_t esp_timer_create(const esp_timer_create_args_t *a,esp_timer_handle_t *t){watchdog=a->callback;*t=(void *)1;return 0;}
@@ -38,6 +39,8 @@ int main(void) {
     app_services_end();c.event=APP_EVENT_STOP;assert(app_services_begin(&c)==0);
     assert(app_host_display_v2(frame,384000)==APP_ERR_RUNTIME);
     assert(app_host_timer_v2(1,1000)==APP_ERR_ARGUMENT);
+    assert(app_host_ble_register_v2(NULL)==APP_ERR_RUNTIME);
+    assert(app_host_ble_set_v2(0,NULL,0)==APP_ERR_RUNTIME);
     open_app("one");assert(app_host_cache_put_v2(1,frame,384000)==0);
     uint32_t n=0;const uint8_t *borrowed=app_host_cache_get_v2(1,&n);
     assert(borrowed&&n==384000&&borrowed[1]==4);

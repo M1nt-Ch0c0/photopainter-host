@@ -4,6 +4,7 @@
 #include "app_services.h"
 #include "app_catalog.h"
 #include "app_button.h"
+#include "app_ble.h"
 #include "wifi_sd.h"
 #include "cJSON.h"
 #include "driver/gpio.h"
@@ -18,7 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-enum {RENDER,SELECT,ROLLBACK,STAGE,REMOVE,WIFI_READ,WIFI_SAVE,NEXT};
+enum {RENDER,SELECT,ROLLBACK,STAGE,REMOVE,WIFI_READ,WIFI_SAVE,NEXT,BLE_FLUSH};
 typedef struct {
     int op;uint32_t generation;const char *id;const char *source;const void *data;size_t size;bool update;
     int *result;SemaphoreHandle_t done;
@@ -61,6 +62,13 @@ static void update_snapshot(void) {
     cJSON_AddNumberToObject(o,"minimum_free_psram",heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
     cJSON_AddNumberToObject(o,"free_internal_ram",heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
     cJSON_AddNumberToObject(o,"minimum_free_internal_ram",heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+    app_ble_service_v2_t ble_schema;uint32_t ble_revision=0;
+    bool ble_registered=app_ble_schema(&ble_schema,NULL,&ble_revision);
+    cJSON_AddNumberToObject(o,"ble_service_revision",ble_registered?ble_revision:0);
+    cJSON_AddNumberToObject(o,"ble_characteristics",ble_registered?ble_schema.count:0);
+    char ble_uuid[33]={0};
+    if(ble_registered)for(unsigned i=0;i<16;i++)snprintf(ble_uuid+2*i,3,"%02x",ble_schema.uuid[i]);
+    cJSON_AddStringToObject(o,"ble_service_uuid",ble_uuid);
     cJSON *apps=cJSON_AddArrayToObject(o,"apps");
     for(int i=0;c&&i<APP_LIMIT;i++) {
         const app_entry_t *a=&c->apps[i];if(!a->id[0])continue;
@@ -98,6 +106,24 @@ void app_manager_status(char *out,size_t size) {
     if(snapshot_lock)xSemaphoreTake(snapshot_lock,portMAX_DELAY);
     snprintf(out,size,"%s",snapshot);
     if(snapshot_lock)xSemaphoreGive(snapshot_lock);
+    /* A BLE receive holds admission without running a catalog job. Sample
+     * heaps at query time so upload memory is visible in the status snapshot,
+     * before the temporary JSON formatting allocations below. */
+    size_t free_psram=heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t min_psram=heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
+    size_t free_internal=heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    size_t min_internal=heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    cJSON *object=cJSON_Parse(out);
+    if(!object)return;
+    const char *names[]={"free_psram","minimum_free_psram","free_internal_ram","minimum_free_internal_ram"};
+    size_t values[]={free_psram,min_psram,free_internal,min_internal};
+    for(unsigned i=0;i<4;i++) {
+        cJSON *item=cJSON_GetObjectItemCaseSensitive(object,names[i]);
+        if(item)cJSON_SetNumberValue(item,values[i]);
+        else cJSON_AddNumberToObject(object,names[i],values[i]);
+    }
+    char *text=cJSON_PrintUnformatted(object);cJSON_Delete(object);
+    if(text){if(strlen(text)<size)strcpy(out,text);free(text);}
 }
 static int next_app(void) {
     const app_catalog_t *c=app_catalog_get();if(!c||c->trial_app>=0)return ESP_ERR_INVALID_STATE;
@@ -122,6 +148,15 @@ static int execute(const job_t *j) {
     case WIFI_READ:return wifi_sd_load(NULL,false,(wifi_profiles_t *)j->data);
     case WIFI_SAVE:return wifi_sd_save(j->data);
     case NEXT:source="button";return next_app();
+    case BLE_FLUSH: {
+        if(j->generation!=app_runtime_generation())return ESP_ERR_INVALID_STATE;
+        app_ble_event_v2_t event;bool written=false;
+        while(app_ble_take(j->generation,&event)) {
+            if(app_runtime_ble(&event)!=APP_OK)return ESP_FAIL;
+            if(event.type==APP_BLE_WRITTEN)written=true;
+        }
+        return written?ESP_OK:ESP_ERR_INVALID_STATE;
+    }
     default:return ESP_ERR_INVALID_ARG;
     }
 }
@@ -138,7 +173,9 @@ static void run(void *unused) {
             uint32_t timer=0;
             bool network=atomic_exchange(&network_dirty,false);
             bool tick=!network&&app_services_timer_due(&timer);
-            if(!network&&!tick){xSemaphoreGive(admission);continue;}
+            app_ble_event_v2_t ble_event;
+            bool ble=!network&&!tick&&app_ble_take(app_runtime_generation(),&ble_event);
+            if(!network&&!tick&&!ble){xSemaphoreGive(admission);continue;}
             atomic_store(&busy,true);atomic_fetch_add(&epoch,1);
             bool event=false;
             if(network) {
@@ -147,6 +184,7 @@ static void run(void *unused) {
                 tick=app_services_timer_due(&timer);
             }
             if(tick) {phase="timer";last_result=app_runtime_event(APP_EVENT_TIMER,timer);event=true;}
+            if(ble) {phase="ble";last_result=app_runtime_ble(&ble_event);event=true;}
             if(event){phase=photoframe_plugin_is_ready()?"idle":"fault";update_snapshot();}
             app_manager_release();
         }
@@ -170,6 +208,7 @@ esp_err_t app_manager_stage(const char *id,const uint8_t *p,size_t n){return inv
 esp_err_t app_manager_remove(const char *id){return invoke((job_t){.op=REMOVE,.id=id});}
 esp_err_t app_manager_wifi_read(wifi_profiles_t *out){return invoke((job_t){.op=WIFI_READ,.data=out});}
 esp_err_t app_manager_wifi_save(const wifi_profiles_t *in){return invoke((job_t){.op=WIFI_SAVE,.data=in});}
+esp_err_t app_manager_ble_flush(uint32_t generation){return invoke((job_t){.op=BLE_FLUSH,.generation=generation});}
 static void button_task(void *unused) {
     (void)unused;app_button_t policy={0};
     for(;;) {

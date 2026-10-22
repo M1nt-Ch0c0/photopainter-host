@@ -71,6 +71,20 @@ class SlotTests(unittest.TestCase):
         self.lib.mock_reset()
         self.assertEqual(self.lib.module_slots_init(), 0)
 
+    def test_v20_context_unchanged_and_v21_ble_event_dispatch(self):
+        self.lib.app_runtime_ble.argtypes=[ctypes.c_void_p]
+        event=ctypes.create_string_buffer(140)
+        for minor in (0,1):
+            self.lib.mock_reset()
+            self.lib.mock_v2(0,1,0)
+            package=package_elf(minimal_elf("photoframe",minor=minor),42)
+            self.lib.mock_seed(package,len(package))
+            self.assertEqual(self.lib.photoframe_plugin_init(),0)
+            self.assertEqual(self.lib.mock_context_minor(),minor)
+            before=self.lib.mock_plugin_calls()
+            self.assertEqual(self.lib.app_runtime_ble(event),0 if minor else -9)
+            self.assertEqual(self.lib.mock_plugin_calls(),before+(1 if minor else 0))
+
     def stage(self):
         return self.lib.module_slots_stage(self.package, len(self.package))
 

@@ -33,7 +33,7 @@ void app_host_complete_v2(const app_result_v2_t *r) {
 }
 static int dispatch(uint32_t type,uint32_t timer,const uint8_t *data,size_t size) {
     if(!loaded||abi!=2||event_active)return APP_ERR_RUNTIME;
-    context=(app_context_v2_t){sizeof(context),2,0,type,++event_id,generation,
+    context=(app_context_v2_t){sizeof(context),2,manifest.abi_minor,type,++event_id,generation,
         type==APP_EVENT_INPUT?APP_INPUT_PNG:0,(uint32_t)size,data,timer,app_services_connected()};
     reported=APP_ERR_RUNTIME;result_received=result_bad=false;last_display=false;
     if(app_services_begin(&context)!=ESP_OK)return APP_ERR_RUNTIME;
@@ -46,9 +46,9 @@ static int dispatch(uint32_t type,uint32_t timer,const uint8_t *data,size_t size
 }
 static bool in_trial(void){const app_catalog_t *c=app_catalog_get();return c&&c->trial_app>=0;}
 static void unload(void) {
+    app_services_close();
     if(loaded)esp_elf_deinit(&elf);
     loaded=runtime_ready=false;slot=app=-1;abi=version=0;legacy_png=NULL;legacy_size=0;
-    app_services_close();
 }
 esp_err_t app_runtime_shutdown(void) {
     if(event_active)return ESP_ERR_INVALID_STATE;
@@ -150,4 +150,10 @@ int app_runtime_event(uint32_t type,uint32_t timer) {
     int e=dispatch(type,timer,NULL,0);
     if(e==APP_ERR_RUNTIME)(void)app_runtime_shutdown();
     return e;
+}
+int app_runtime_ble(const app_ble_event_v2_t *event) {
+    if(abi!=2 || !runtime_ready || manifest.abi_minor<1)return APP_ERR_UNSUPPORTED;
+    int result=dispatch(APP_EVENT_BLE,0,(const uint8_t *)event,sizeof(*event));
+    if(result==APP_ERR_RUNTIME)(void)app_runtime_shutdown();
+    return result;
 }

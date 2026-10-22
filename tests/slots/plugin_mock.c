@@ -3,7 +3,8 @@
 #include "app_runtime.h"
 esp_elf_symbol_table_t g_esp_photoframe_elfsyms[] = {{0}};
 static int fail_load, result, live, peak, calls, report = 1;
-static int v2_mode,display=1,fail_event,trace[128],trace_count;
+static int v2_mode,display=1,fail_event,trace[128],trace_count,last_minor;
+int mock_context_minor(void){return last_minor;}
 void mock_v2(int mode,int shown,int fail) {v2_mode=mode;display=shown;fail_event=fail;trace_count=0;}
 int mock_trace(int i){return i<trace_count?trace[i]:-1;}
 extern void photoframe_host_report_result(int result);
@@ -25,6 +26,7 @@ int esp_elf_request(esp_elf_t *elf, int opt, int argc, char **argv) {
     (void)elf; (void)opt; (void)argc; (void)argv; ++calls;
     const app_context_v2_t *c=app_host_context_v2();
     if(c) {
+        last_minor=c->abi_minor;
         if(trace_count<128)trace[trace_count++]=c->event;
         app_result_v2_t r={sizeof(r),c->event_id,c->generation,
             c->event==(unsigned)fail_event?APP_ERR_RUNTIME:APP_OK,

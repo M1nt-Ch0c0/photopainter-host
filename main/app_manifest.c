@@ -25,7 +25,7 @@ bool app_manifest_read(const uint8_t *p,size_t n,app_manifest_v2_t *out) {
     if(!out || !module_elf_valid(p,n))return false;
     uint32_t off=u32(p+32);uint16_t count=u16(p+48),names=u16(p+50);
     const uint8_t *ns=p+off+names*40;uint32_t nso=u32(ns+16),nss=u32(ns+20);
-    bool found=false;
+    bool found=false,uses_ble=false;
     for(unsigned i=0;i<count;i++) {
         const uint8_t *s=p+off+i*40;uint32_t name=u32(s),type=u32(s+4),start=u32(s+16),size=u32(s+20);
         if(name>=nss || !span(nso,nss,n) || !memchr(p+nso+name,0,nss-name))return false;
@@ -41,11 +41,13 @@ bool app_manifest_read(const uint8_t *p,size_t n,app_manifest_v2_t *out) {
                 uint32_t k=u32(sym);if(k>=ss||!span(so,ss,n)||!memchr(p+so+k,0,ss-k))return false;
                 const char *text=(const char *)p+so+k;
                 if(text[0] && !allowed(text))return false;
+                if(!strncmp(text,"app_host_ble_",13))uses_ble=true;
             }
         }
     }
     return found && out->magic==APP_MANIFEST_MAGIC && out->size==sizeof(*out) &&
         out->abi_major==2 && out->abi_minor<=APP_ABI_MINOR && !(out->inputs&~APP_INPUT_PNG) &&
+        (!uses_ble || out->abi_minor>=1) &&
         !(out->flags&~APP_REQUIRES_DISPLAY) && !out->reserved[0] && !out->reserved[1] &&
         printable(out->id,sizeof(out->id),true) && printable(out->name,sizeof(out->name),false);
 }

@@ -29,8 +29,9 @@ EventBits_t xEventGroupWaitBits(EventGroupHandle_t h, EventBits_t b, int clear, 
             event(NULL, IP_EVENT, IP_EVENT_STA_GOT_IP, &ip);
         } else if (choices[attempts-1] == 2) event(NULL, WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, NULL);
     } else if (b == BIT1) {
-        if (scenario != 2) longjmp(end, 1);
-        event(NULL, WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, NULL);
+        if (scenario != 2 && scenario != 3) longjmp(end, 1);
+        if(scenario==3)event(NULL,IP_EVENT,IP_EVENT_STA_LOST_IP,NULL);
+        else event(NULL, WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, NULL);
     } else if (b == BIT2) assert(bits & BIT2);
     return bits;
 }
@@ -63,7 +64,7 @@ int main(int argc, char **argv)
     for (int i=0; i<3; ++i) { profiles.items[i].ssid[0] = '0'+i; strcpy(profiles.items[i].password, "password"); }
     wifi_profiles_t before = profiles;
     if (scenario == 1) { choices[0] = 2; choices[1] = 1; }
-    if (scenario == 2) { choices[0] = 2; choices[1] = 1; }
+    if (scenario == 2 || scenario == 3) { choices[0] = 2; choices[1] = 1; }
     assert(photopainter_wifi_connect(&profiles) == 0);
     if (!setjmp(end)) worker(NULL);
     assert(!memcmp(&before, &profiles, sizeof(profiles)));
@@ -74,3 +75,8 @@ int main(int argc, char **argv)
 }
 
 void app_manager_network_changed(bool connected){(void)connected;}
+void photopainter_ble_network(uint8_t state,uint32_t ip,const char *ssid) {
+    assert(state<=2);
+    if(state==1)assert(ssid && ssid[0]>='0' && ssid[0]<='2' && ip==0);
+    else assert(ssid==NULL);
+}

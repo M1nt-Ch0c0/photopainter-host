@@ -17,11 +17,14 @@ class RuntimeServiceTests(unittest.TestCase):
     def test_button_debounce_busy_epoch_and_boot_held(self):
         self.run_native("button",["main/app_button.c","tests/runtime/test_button.c"])
     def test_services_cache_display_timers_and_watchdog(self):
-        self.run_native("services",["main/app_services.c","components/photopainter_board/src/board.c","tests/runtime/test_services.c"])
+        self.run_native("services",["main/app_services.c","main/app_ble.c","components/photopainter_board/src/board.c","tests/runtime/test_services.c"])
 
     def test_manager_serialization_coalescing_snapshot_and_input_lifetime(self):
-        self.run_native("manager",["main/app_manager.c","main/app_button.c",
+        self.run_native("manager",["main/app_manager.c","main/app_button.c","main/app_ble.c",
             "tests/runtime/test_manager.c","managed_components/espressif__cjson/cJSON/cJSON.c"])
 
     def test_offline_and_bad_token_never_prevent_local_start(self):
         self.run_native("boot",["main/app_main.c","tests/runtime/test_boot_order.c"])
+
+    def test_ble_copies_bounds_events_and_unload_cleanup(self):
+        self.run_native("ble-app",["main/app_ble.c","tests/runtime/test_app_ble.c"])

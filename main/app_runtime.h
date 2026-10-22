@@ -7,5 +7,6 @@ bool app_runtime_ready(void);
 bool app_runtime_accepts_png(void);
 bool app_runtime_last_display(void);
 int app_runtime_event(uint32_t event,uint32_t timer_id);
+int app_runtime_ble(const app_ble_event_v2_t *event);
 /* Shutdown without loading another instance, including after failed STOP. */
 esp_err_t app_runtime_shutdown(void);

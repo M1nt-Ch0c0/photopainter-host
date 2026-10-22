@@ -31,3 +31,6 @@ class WiFiWorkerTests(unittest.TestCase):
 
     def test_loss_of_working_second_ap_restarts_from_priority_zero(self):
         self.assertEqual(self.run_scenario(2), "2 0:20000 1:20000 0:20000 1:20000 2:20000")
+
+    def test_lost_ip_updates_discovery_and_restarts_priority(self):
+        self.assertEqual(self.run_scenario(3), "2 0:20000 1:20000 0:20000 1:20000 2:20000")

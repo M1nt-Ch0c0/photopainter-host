@@ -8,11 +8,12 @@
 #define PP_BLE_FRAME_MAX 512
 #define PP_BLE_INFO_SIZE 20
 #define PP_BLE_IDLE_MS 60000u
-#define PP_BLE_SESSION_MS (30u * 60u * 1000u)
+#define PP_BLE_SESSION_MS (2u * 60u * 60u * 1000u)
 enum pp_ble_op {
     PP_BLE_AUTH=1, PP_BLE_INFO=2, PP_BLE_STATUS=3, PP_BLE_BEGIN=4,
     PP_BLE_CHUNK=5, PP_BLE_COMMIT=6, PP_BLE_ABORT=7, PP_BLE_PROGRESS=8,
     PP_BLE_ACTIVATE=9, PP_BLE_SWITCH=10, PP_BLE_ROLLBACK=11, PP_BLE_REMOVE=12,
+    PP_BLE_APP_READ=13, PP_BLE_APP_WRITE=14,
 };
 enum pp_ble_error {
     PP_BLE_OK=0, PP_BLE_UNAUTHORIZED=1, PP_BLE_UNCONFIGURED=2, PP_BLE_BUSY=3,
@@ -27,6 +28,7 @@ typedef struct {
     int (*stage)(const char *, const uint8_t *, size_t);
     int (*manage)(uint8_t, const char *);
     void (*status)(char *, size_t);
+    int (*app)(uint8_t,const uint8_t *,size_t,uint8_t *,size_t *);
 } pp_ble_ops;
 typedef struct {
     uint8_t nonce[32], key[32], id[6];

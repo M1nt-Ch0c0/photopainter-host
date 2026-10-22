@@ -3,6 +3,7 @@
 #include "app_runtime.h"
 #include "app_services.h"
 #include "app_catalog.h"
+#include "app_ble.h"
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -64,6 +65,10 @@ bool app_services_timer_due(uint32_t *id){(void)id;return false;}
 static bool connected;
 void app_services_network(bool v){connected=v;}
 static atomic_int events,inside,allow_finish,finished;
+static atomic_int ble_events;
+atomic_size_t mock_free_psram=8000000,mock_free_internal=32768;
+void photopainter_ble_app_changed(void){}
+int app_runtime_ble(const app_ble_event_v2_t *event){assert(event->type==APP_BLE_CONNECTED || event->type==APP_BLE_WRITTEN);ble_events++;return APP_OK;}
 int app_runtime_event(uint32_t type,uint32_t timer){assert(type==APP_EVENT_NETWORK&&connected);(void)timer;events++;return 0;}
 uint32_t app_runtime_abi(void){return 2;}
 uint32_t app_runtime_generation(void){return 42;}
@@ -98,10 +103,28 @@ int main(void) {
     for(int i=0;!inside&&i<1000;i++)usleep(1000);
     assert(inside&&app_manager_busy()&&!app_manager_acquire());
     char status[4096];app_manager_status(status,sizeof(status));assert(strstr(status,"display"));
+    mock_free_psram=7500000;mock_free_internal=24576;
+    app_manager_status(status,sizeof(status));
+    assert(strstr(status,"\"free_psram\":7500000") && strstr(status,"\"free_internal_ram\":24576"));
     for(int i=0;i<20;i++)app_manager_network_changed(true);
     usleep(60000);assert(events==0&&!finished);
     allow_finish=1;pthread_join(t,NULL);assert(finished);
     for(int i=0;!events&&i<1000;i++)usleep(1000);
     assert(events==1);usleep(60000);assert(events==1&&!app_manager_busy());
+    app_ble_bind(42);
+    app_ble_service_v2_t service={.size=sizeof(service),.count=1,.uuid={0x91},
+        .characteristics={{.uuid={0x92},.properties=APP_BLE_READ|APP_BLE_WRITE,.max_bytes=128}}};
+    assert(app_ble_register(42,&service)==APP_OK);app_ble_connection(true);
+    uint32_t rev;assert(app_ble_schema(NULL,NULL,&rev));
+    uint8_t output[128];size_t size=0;
+    assert(app_manager_acquire());
+    assert(app_ble_request(true,42,rev,0,(const uint8_t *)"echo",4,output,&size)==0);
+    usleep(60000);int before=ble_events; /* Queued BLE events cannot bypass admission. */
+    usleep(60000);assert(ble_events==before);
+    assert(app_manager_ble_flush(42)==0 && ble_events==2 && app_manager_busy());
+    assert(app_manager_ble_flush(41)==ESP_ERR_INVALID_STATE);
+    app_manager_release();
+    for(int i=0;ble_events<2&&i<1000;i++)usleep(1000);
+    assert(ble_events==2);app_ble_cancel();
     return 0;
 }

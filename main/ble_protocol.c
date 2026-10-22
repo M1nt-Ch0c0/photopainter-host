@@ -121,6 +121,12 @@ static int operation(pp_ble_session *s,uint8_t op,const uint8_t *p,size_t n,
         int result=s->ops->manage(op,(const char *)p);
         s->ops->release();return result;
     }
+    case PP_BLE_APP_READ: case PP_BLE_APP_WRITE: {
+        if(!s->ops->app || n<12 || n>140 || (op==PP_BLE_APP_READ && n!=12))return PP_BLE_INVALID;
+        if(s->held || !s->ops->acquire())return PP_BLE_BUSY;
+        int result=s->ops->app(op,p,n,out,length);
+        s->ops->release();return result;
+    }
     default:return PP_BLE_INVALID;
     }
 }

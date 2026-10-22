@@ -2,6 +2,8 @@
 
 本页描述已实现的运行接口。真机部署版本、已通过项目与未验收项见 [本轮验收记录](docs/validation-runtime-v2.md)。固定使用 ESP-IDF `5e6f53cdb31fe5708eae3f55af9737be2822db22` 与未修改的 Registry elf_loader 1.3.3。
 
+本分支新增兼容扩展 **ABI 2.1**：常驻 BLE 发现和应用安装属于宿主；应用可通过三个受管服务注册自定义 GATT、设置值和注销。`APP_MANIFEST` 保持 2.0，使用新服务时声明 `APP_MANIFEST_BLE`（2.1）。布局不变，旧 ABI 1/2.0 继续运行；旧宿主会拒绝 2.1 包。协议、事件、鉴权和限制见 [BLE 协议](docs/ble-protocol.md)，尚未进行硬件验证，见 [验收清单](docs/validation-ble.md)。
+
 ## 安装数量和切换
 
 最多安装 **5 个应用**，每个应用有独立的 A/B 两个 1 MiB 槽；4096 字节包头包含在槽大小内。A/B 是同一应用的两个版本，不是额外应用。任意时刻只加载、执行一个 ELF，分区表和原目录布局没有改变。
@@ -28,6 +30,7 @@ python3 tools/module.py switch --app photoframe --url http://DEVICE_IP
 ```mermaid
 flowchart LR
     HTTP[HTTP 鉴权与收包] --> Manager[唯一 App Manager]
+    BLE[常驻 BLE：发现、鉴权、收包及应用事件] --> Manager
     Key[GPIO 4 短按] --> Manager
     Events[定时及网络状态] --> Manager
     Manager --> Catalog[5 bank 目录与独立 A/B]
@@ -39,7 +42,7 @@ flowchart LR
 
 所有应用调用、目录变更及 SD 配置操作在同一管理任务执行。HTTP 接纳锁覆盖收包到响应，一个大请求体同时在途；队列上限 8 个描述符。作业借用的输入一直保留到调用完成，客户端断开不会取消已经开始的刷新。运行代次随加载变化；定时器切出自动取消，网络通知合并，只交付连接状态。状态快照由宿主管理；HTTP 服务本身串行处理请求，长事务期间后来的状态请求可能等待。
 
-ABI 2 入口通过 `app_host_context_v2()` 取得 START=1、INPUT=2、TIMER=3、NETWORK_CHANGED=4、STOP=5。每次入口必须调用一次 `app_host_complete_v2()`；结果缺失、重复、错误事件 ID/代次均视为运行错误。START 必须报告 APP_READY；显示应用还必须有本次真实显示完成凭据，才能确认候选。STOP 返回后才卸载。基础逻辑看门狗 5 秒；同步显示及旧 ABI 1 调用预算 650 秒，CLI push/switch/activate/rollback 等待上限 660 秒。看门狗重启设备，不强行卸载仍在执行的代码。
+ABI 2 入口通过 `app_host_context_v2()` 取得 START=1、INPUT=2、TIMER=3、NETWORK_CHANGED=4、STOP=5；显式声明 2.1 的应用还可接收 BLE=6。每次入口必须调用一次 `app_host_complete_v2()`；结果缺失、重复、错误事件 ID/代次均视为运行错误。START 必须报告 APP_READY；显示应用还必须有本次真实显示完成凭据，才能确认候选。STOP 返回后先取消定时器、BLE 服务和事件，再卸载。基础逻辑看门狗 5 秒；同步显示及旧 ABI 1 调用预算 650 秒，CLI push/switch/activate/rollback 等待上限 660 秒。看门狗重启设备，不强行卸载仍在执行的代码。
 
 宿主 SDK 原件为 [`sdk/photopainter_app.h`](sdk/photopainter_app.h)，应用仓库保存同内容副本。ABI 2 的允许导入列表由 [`sdk/abi2_imports.inc`](sdk/abi2_imports.inc) 统一供打包工具和 C 校验器读取。禁止直接导入任务、GPIO、SPI、I²C 和系统回调接口。原生应用仍共享内存；这些约束不构成进程或恶意代码沙箱。
 
