@@ -23,7 +23,7 @@ The host now loads an independent app ELF from A/B data slots. Read `docs-module
 - Resolve `espressif/elf_loader: ^1.3.3` from the Component Registry. Never fork, vendor, or patch it.
 - Do not base work on `aitjcize/esp32-photoframe` or a Waveshare complete firmware.
 - Do not add WebUI, album, whole-firmware OTA, Home Assistant, deep sleep, or an SD dependency for applications. The user-requested SD Wi-Fi boot source and first migration from NVS/wifi.txt are supported. Preserve valid JSON authority and atomic .tmp/.bak publication; never format the card. Independent per-app A/B updates are supported.
-- Keep image pushes on `POST /api/push` and authenticated module management on `/api/module`, and SD Wi-Fi configuration on `/api/wifi`, all on port 80. Do not add public exposure or port mapping.
+- Keep HTTP image pushes on `POST /api/push`, module management on `/api/module`, and SD Wi-Fi configuration on `/api/wifi`, all on port 80. The user-requested BLE image/app transports share the same manager and validation paths. Do not add public exposure or port mapping.
 - Preserve status semantics: unconfigured token 503, missing or wrong token 401, over 5 MiB 413, invalid compatible image 4xx, and 200 only after physical refresh plus final POWER_OFF wait.
 - Reject every invalid request before display I/O.
 
@@ -52,7 +52,7 @@ The IDF revision check must match exactly. Do not edit generated build output or
 - Before flashing, back up and hash all 16 MiB of Flash. Back up an installed microSD unless the user explicitly waives it for that run.
 - Treat opening native USB serial as a device reset that can abort an active HTTP request.
 - Stop automatic pushers before one-shot display tests. Do not allow ambiguous transport failures to cause repeated panel refreshes.
-- Require HTTP 200 and then human visual confirmation. An e-paper image remains visible without power.
+- Require HTTP 200 or an authenticated BLE image-completion receipt, then human visual confirmation. An upload/staging acknowledgement is not physical completion. An e-paper image remains visible without power.
 
 ## Secrets
 

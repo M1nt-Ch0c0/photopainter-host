@@ -11,6 +11,6 @@ The host never builds or embeds a sibling business ELF. Apps use the fixed IDF c
 
 A display app's ABI 2 START is ready only after a correct result and a host-observed complete refresh. INPUT(PNG) is specific to compatible apps. STOP returns before unload. All sources use the same admission/manager boundary; client disconnect does not release live input. Stage/activate/switch remain explicit. GPIO 4 selects only confirmed ABI 2 active versions.
 
-PNG generation and decoding preserve opaque exact black/white/yellow/red/blue/green, 800×480, noninterlaced, no trailing bytes. Host board service alone rotates/packs logical ABI 2 pixels and preserves E6 final POWER_OFF completion. Push 200 proves that physical completion; management 200 has a different contract.
+PNG generation and decoding preserve opaque exact black/white/yellow/red/blue/green, 800×480, noninterlaced, no trailing bytes. Host board service alone rotates/packs logical ABI 2 pixels and preserves E6 final POWER_OFF completion. HTTP push 200 or a signed BLE image result proves that physical completion; upload/stage success has a different contract. BLE images borrow PSRAM through the same manager render call and retain bounded per-boot receipts for safe reconnect queries.
 
 Wi-Fi JSON authority, atomic .tmp/.bak migration/save and all credential boundaries are unchanged. No app receives Wi-Fi credentials or host usage keys. Runtime cache is optional RAM, not SD persistence. No WebUI, OTA, background app tasks or new public service is added.

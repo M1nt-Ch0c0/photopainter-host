@@ -105,3 +105,11 @@ Do not hardcode the discovered IP or port into committed files. DHCP and COM ass
 ## 8. Flash, provision, and push only with authorization
 
 After backup and target verification, the host README contains the supported flash and NVS provisioning commands. After provisioning, first issue an unauthenticated probe and expect 401. Then make a single authenticated test push and wait for HTTP 200. Visually confirm content, orientation, and all six colors.
+
+For an already provisioned host supporting BLE images, the device does not need
+Wi-Fi. Configure the computer's `PHOTOFRAME_PUSH_TRANSPORT=ble` and device ID,
+authenticate through the trusted launcher, and send one validated PNG. Require
+its authenticated physical-completion receipt and human visual confirmation.
+After an ambiguous COMMIT, query the original receipt rather than resending a
+draw; a changed boot or missing receipt stops automatic retries. Do not provision
+again simply to use BLE, and do not open serial as a liveness probe.

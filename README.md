@@ -8,6 +8,8 @@
 
 当前自主首屏、功能键切换、双 ABI 与恢复规则，见 [应用运行层指南](docs-runtime-v2.md)。
 
+宿主常驻 BLE 支持按设备 ID 发现、PNG 推图、应用 A/B 更新和 ABI 2.1 自定义 GATT。发现、推图和应用更新均可在相框没有 Wi-Fi 地址时完成；协议与安全边界见 [BLE 协议](docs/ble-protocol.md)，实测范围见 [BLE 验收记录](docs/validation-ble.md)。
+
 ## 刷写
 
 本固件只适用于 7.3 英寸、800×480、N16R8 的 ESP32-S3 PhotoPainter。刷写前先把 16 MiB Flash 完整读出并校验 SHA-256；若机内有 microSD，也应关机取卡、用读卡器制作整卡镜像并校验。备份文件放在仓库之外。
@@ -35,13 +37,15 @@ chmod 600 secrets.env
 
 ## 推图
 
-设备连入 2.4 GHz Wi-Fi 后，只接受不超过 5 MiB 的 800×480 六色原始 PNG：
+只接受不超过 5 MiB 的 800×480 六色原始 PNG。设备连入 2.4 GHz Wi-Fi 后可通过 HTTP 推图：
 
 ```bash
 python3 tools/module.py push --url http://DEVICE_IP --input frame.png
 ```
 
 响应 `200` 表示电子纸已经完成刷新并关断面板电源；典型需要约 25 秒。无效 PNG、错误尺寸或六色以外的像素在驱动屏幕前即被拒绝。设备 USB/Wi-Fi 保持常亮，不进入深睡眠。
+
+无需 Wi-Fi 的 BLE 推图使用电脑端 `ai-quota-frame ble push --file frame.png`，令牌由可信启动器私下加载；常驻服务设置 `PHOTOFRAME_PUSH_TRANSPORT=ble` 和设备 ID。两种传输复用同一个 App Manager 和应用 PNG 解码器。BLE 只有鉴权的完成凭据才表示实体刷新及最终 POWER_OFF 完成；回复丢失后查询原凭据，不盲目重刷。设备重启或凭据丢失时停止该图片的自动重试。现有 ABI 1/2 相框无需重新构建。
 
 ## 鉴权
 

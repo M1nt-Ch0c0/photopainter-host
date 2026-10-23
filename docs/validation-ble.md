@@ -1,5 +1,10 @@
 # BLE validation record
 
+The current host is `b4709c0` with BLE PNG support. The 2026-10-23 Mac update,
+offline application OTA, one-refresh image test, lost-reply recovery and new
+memory figures are in [Offline BLE image validation](validation-ble-images.md).
+The remainder of this document records the preceding Windows validation.
+
 Device testing was explicitly authorized on 2026-10-22. The ESP32-S3 USB identity
 was verified, the automatic Windows pusher/watchdog was stopped, and all 16 MiB
 of Flash were backed up privately and verified before the first write. The user
@@ -8,7 +13,7 @@ binary at `0x10000`; ROM digests before/after verified that the bootloader,
 partition table, NVS, application slots and activation journal were unchanged by
 those host writes. No provisioning or partition changes were performed.
 
-The currently installed host code is `40ea296`; its 1104864-byte image SHA-256 is
+The host installed for the Windows validation was `40ea296`; its 1104864-byte image SHA-256 is
 `cbe9c27f88ed4be2f70c46b406d453e307ef23715fa23088522e21c3b9c5c82f`.
 It was written through the restored native Windows COM55 port after checking
 the exact ESP32-S3 MAC and rechecking the full backup hash. Image readback and

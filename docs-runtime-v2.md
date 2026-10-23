@@ -2,7 +2,7 @@
 
 本页描述已实现的运行接口。真机部署版本、已通过项目与未验收项见 [本轮验收记录](docs/validation-runtime-v2.md)。固定使用 ESP-IDF `5e6f53cdb31fe5708eae3f55af9737be2822db22` 与未修改的 Registry elf_loader 1.3.3。
 
-本分支新增兼容扩展 **ABI 2.1**：常驻 BLE 发现和应用安装属于宿主；应用可通过三个受管服务注册自定义 GATT、设置值和注销。`APP_MANIFEST` 保持 2.0，使用新服务时声明 `APP_MANIFEST_BLE`（2.1）。布局不变，旧 ABI 1/2.0 继续运行；旧宿主会拒绝 2.1 包。协议、事件、鉴权和限制见 [BLE 协议](docs/ble-protocol.md)，尚未进行硬件验证，见 [验收清单](docs/validation-ble.md)。
+本分支新增兼容扩展 **ABI 2.1**：常驻 BLE 发现、PNG 推送和应用安装属于宿主；应用可通过三个受管服务注册自定义 GATT、设置值和注销。`APP_MANIFEST` 保持 2.0，使用新服务时声明 `APP_MANIFEST_BLE`（2.1）。布局不变，旧 ABI 1/2.0 继续运行；旧宿主会拒绝 2.1 包。BLE 推图复用既有 PNG 输入，不要求应用使用 ABI 2.1 或重新构建。协议、事件、鉴权和限制见 [BLE 协议](docs/ble-protocol.md)，实际覆盖范围见 [验收记录](docs/validation-ble.md)。
 
 ## 安装数量和切换
 
