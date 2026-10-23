@@ -104,12 +104,6 @@ Do not hardcode the discovered IP or port into committed files. DHCP and COM ass
 
 ## 8. Flash, provision, and push only with authorization
 
-After backup and target verification, the host README contains the supported flash and NVS provisioning commands. After provisioning, first issue an unauthenticated probe and expect 401. Then make a single authenticated test push and wait for HTTP 200. Visually confirm content, orientation, and all six colors.
+After backup and target verification, use the current framework deployment guide. Do not reuse historical partition writes for a five-bank device. Verify authenticated application status, then install/activate a suitable ABI 2 example through the standard manager path; no-display apps confirm without a PNG. Application business input and display tests follow the app/client guide, not a mandatory framework push workflow.
 
-For an already provisioned host supporting BLE images, the device does not need
-Wi-Fi. Configure the computer's `PHOTOFRAME_PUSH_TRANSPORT=ble` and device ID,
-authenticate through the trusted launcher, and send one validated PNG. Require
-its authenticated physical-completion receipt and human visual confirmation.
-After an ambiguous COMMIT, query the original receipt rather than resending a
-draw; a changed boot or missing receipt stops automatic retries. Do not provision
-again simply to use BLE, and do not open serial as a liveness probe.
+For already provisioned devices, resident BLE discovery and app management do not require Wi-Fi or reprovisioning. The tested legacy host image path remains a compatibility feature; the photoframe-owned BLE image route requires the matching ABI 2.1 app and desktop client. Require an authenticated physical-completion receipt and human visual confirmation for an actual display test. Query the original receipt after an uncertain COMMIT; changed boot/missing receipt stops blind repeat. Never open serial merely to test liveness.

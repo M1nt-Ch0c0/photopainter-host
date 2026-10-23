@@ -1,5 +1,7 @@
 # PhotoPainter host agent guide
 
+**Source and documentation baseline:** main includes the resident BLE/ABI 2.1 framework, photoframe-owned image reception and its desktop client. See the [version/status matrix](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Status-and-Evidence.md) for source commits and remaining hardware acceptance limits.
+
 This is the canonical entry point for AI-assisted work on the three-repository PhotoPainter system. For a new computer, deployment, cross-repository change, or hardware investigation, read the complete project skill at [.agents/skills/develop-photopainter-stack/SKILL.md](.agents/skills/develop-photopainter-stack/SKILL.md) before acting.
 
 ## Read order
@@ -12,7 +14,9 @@ This is the canonical entry point for AI-assisted work on the three-repository P
 
 ## Repository role
 
-This repository owns the ESP32-S3 host: NVS configuration, Wi-Fi, `POST /api/push`, Bearer authentication, request buffering, ELF relocation, and host bridge symbols. PNG decoding and first-screen policy belong to sibling `photoframe`; ABI 2 E6/power timing belongs to this host's `photopainter_board` component. ABI 1 keeps its legacy driver. Quota collection and PNG rendering belong to `ai-quota-frame`.
+This repository owns the resident framework: network configuration/stack, authentication, application OTA/catalog, ELF loading, the single manager and generic host services. ABI 2 board I/O belongs to `photopainter_board`. PNG decoding, first-screen policy and the approved app-owned BLE receive protocol belong to `photoframe`; collection/rendering/sending belongs to `ai-quota-frame`.
+
+The developer entry is the [framework Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Home.md). Keep framework README workflows about loading and managing applications. Existing HTTP PNG and dedicated host BLE PNG paths remain compatibility features; do not extend the dedicated host image protocol or flash the host for the new app-owned route without a demonstrated generic ABI gap and the user's applicable authorization. The app-owned receive route is implemented in sibling photoframe; its protocol and validation remain application-owned.
 
 The host now loads an independent app ELF from A/B data slots. Read `docs-module-slots.md` for package, activation, confirmation and rollback. The explicit user-requested module update architecture supersedes the former embedded-only/no-module-update design.
 

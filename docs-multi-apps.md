@@ -1,6 +1,6 @@
 # 多 Wi-Fi 与多应用管理
 
-本次在独立 ELF 架构上迁移 `ai-quota-frame` 的 `055467016fcc5b6eca8a3bc39e7c18f93120c9d6` 多 Wi-Fi 行为，并增加多个应用独立安装、切换、更新和 A/B 回退。实现位于 `photopainter-host`，不需要把旧整机固件作为构建基础。
+本页记录宿主的五 bank 应用目录、A/B 管理和 SD/NVS 网络配置。框架开发入口见 [开发者 Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Home.md)。这里维护框架规则；相框收图业务与电脑渲染/发送流程在各自仓库。
 
 ## Wi-Fi 配置
 
@@ -105,49 +105,32 @@ flowchart TB
 
 所有应用仍是受信任的原生 ELF，共享内存与硬件；不是进程或沙箱。ABI 2 禁止自建任务/回调，STOP 后卸载；ABI 1 仍须在调用返回前释放资源。多个应用的代码可各自构建，但必须声明宿主支持的 ABI；不支持在后台同时常驻多个应用。
 
-## 包与命令
+## 包与管理命令
 
-新包 format 2 保留原 52 字节头，并在偏移 52 添加 32 字节 NUL 结尾应用 ID。其余部分填充到 4096 字节后跟 ELF。长度、版本和 payload SHA-256 布局不变；format 2 同时接受 ABI 1/2，ABI 2 另检查只读 manifest 和导入集合；包头 ID 必须与管理请求目标一致。format 1 的旧包只能用于 `photoframe`。SHA-256 用于完整性检测，不是签名认证；上传权限仍由设备 Bearer 令牌控制。
+format 2 保留原 52 字节头，在偏移 52 添加 32 字节 NUL 填充 APP ID，填充至 4096 字节后跟 ELF。支持 ABI 1/2，ABI 2 还校验 manifest 和导入；ID 必须与请求一致。format 1 仅保留旧 photoframe ABI 1。SHA-256 用于完整性，上传鉴权由设备 Bearer 或 BLE HMAC 提供，不是包作者签名。
 
-```bash
-# 以下 clock 推图步骤演示 ABI 1 兼容应用。ABI 2 color-test 在 activate/switch 时自主显示，不要再推触发图。
-# 两个应用分别构建 ELF；以下路径用各自真实构建产物替换。
-# 可直接使用 photoframe 仓库 examples/color-test 的独立第二应用。
-python3 tools/module.py package --app clock --version 1 --input /path/to/clock.app.elf --output /tmp/clock-v1.pkg
-python3 tools/module.py stage --app clock --url http://DEVICE_IP --input /tmp/clock-v1.pkg
-python3 tools/module.py activate --app clock --url http://DEVICE_IP
-python3 tools/module.py push --app clock --url http://DEVICE_IP --input /path/to/frame.png
+以下以无显示的 ABI 2 lifecycle 为例，不要求推一张图片确认：
+
+```sh
+# 先在 photoframe/examples/lifecycle 构建；在宿主仓库打包
+python3 tools/module.py package --app lifecycle --version 1 --input ../photoframe/examples/lifecycle/build-app/lifecycle.app.elf --output /tmp/lifecycle-v1.pkg
+python3 tools/module.py stage --app lifecycle --url http://DEVICE_IP --input /tmp/lifecycle-v1.pkg
+python3 tools/module.py activate --app lifecycle --url http://DEVICE_IP
 python3 tools/module.py status --url http://DEVICE_IP
-
-# 更新 clock 的另一个槽；其他应用的版本不受影响。
-python3 tools/module.py package --app clock --version 2 --input /path/to/new-clock.app.elf --output /tmp/clock-v2.pkg
-python3 tools/module.py stage --app clock --url http://DEVICE_IP --input /tmp/clock-v2.pkg
-python3 tools/module.py activate --app clock --url http://DEVICE_IP
-python3 tools/module.py push --app clock --url http://DEVICE_IP --input /path/to/frame.png
-
-python3 tools/module.py switch --app photoframe --url http://DEVICE_IP
-python3 tools/module.py push --app photoframe --url http://DEVICE_IP --input /path/to/frame.png
-python3 tools/module.py rollback --app clock --url http://DEVICE_IP
-python3 tools/module.py remove --app clock --url http://DEVICE_IP
 ```
 
-HTTP 管理保持 `/api/module`、端口 80、原 Bearer。上传用 `POST /api/module?app=clock`，操作加 `&op=activate|switch|rollback|remove`，GET 列出全部应用。原省略 `app` 的管理操作默认为 `photoframe`。
+也可以通过常驻 BLE 的 `ble install` / `ble activate`，无需 Wi-Fi。完整更新、回退及删除前提见 [安装指南](docs-module-slots.md)。删除必须先离开该 APP，回退必须有候选或 previous；不要把整段示例当作可无条件顺序执行的脚本。
 
-推图保持 `POST /api/push`，可带 `X-PhotoPainter-App: clock`；省略时明确指向 `photoframe`。若目标未运行则返回 409，且不操作显示器。这使现有额度定时推送在其他应用运行时不会误投图片。
+HTTP 管理保持 `/api/module`、端口 80、原 Bearer。上传用 `POST /api/module?app=lifecycle`，操作加 `&op=activate|switch|rollback|remove`，GET 列出全部 APP。省略 APP 的旧管理操作默认为 photoframe，新增 APP 应显式带 ID。
 
-状态的 `selected/trial_app/loaded_app` 是 bank 索引，`apps[].id` 提供对应名称；`versions` 按 A/B 顺序显示经过包头、ID、payload SHA 与 ELF 结构校验的版本，无法读出有效包时为 null。版本存在不等于该槽已通过实体刷新确认，须结合 active/previous/pending。旧顶层 active 等字段描述当前运行应用。
+`selected/trial_app/loaded_app` 是 bank 索引，`apps[].id` 给出名称；`versions` 按 A/B 显示通过包头、ID、payload SHA 和 ELF 校验的版本，无效为 null。版本存在不等于已运行确认，要结合 active/previous/pending 和 runtime_ready。当前应用 ABI 看 payload_abi，不看旧顶层管理封套 abi。
 
-## 从旧双槽宿主升级
+旧 HTTP PNG 输入目标与错误语义仅作兼容，见 [旧输入参考](docs/legacy-image-input.md)；新相框 APP 收图路线见 [Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/BLE-Image-App-Roadmap.md)。
 
-本次新增分区表和宿主代码，不能只上传一个 ELF。先停止自动推图，识别设备并重新完整备份 Flash；若有 SD，备份卡上的文件。核对 Flash 地址后只写分区表与宿主：
+## 历史布局迁移与当前维护边界
 
-```bash
-idf.py build
-python3 -m esptool --chip esp32s3 --port /dev/cu.YOUR_DEVICE write-flash \
-  0x8000 build/partition_table/partition-table.bin \
-  0x10000 build/photopainter_host.bin
-```
+两槽到五 bank 的迁移属于历史操作，原说明可在 [历史提交](https://github.com/M1nt-Ch0c0/photopainter-host/blob/3b6f7e2/docs-multi-apps.md) 查阅。该操作不适用于已经具有五 bank 的当前设备，不得把历史分区写入命令用于本轮开发。
 
-不写旧槽、网络 NVS 或 `elf_state`；首次新宿主启动会导入原日志。首次全新设备的种子部署仍见 [旧双槽文档](docs-module-slots.md)，但使用当前分区表。升级后不要直接降级旧宿主：它不理解新目录，可能使用已经过时的旧 `state`；若需整机恢复应按已备份镜像完整恢复。
+当前应用 OTA 只写目标备用数据槽。当前宿主更新不改分区表，另获授权并完成整片备份后仅写 `0x10000` 宿主 bin，保留 NVS、目录和所有 APP。全新设备种子或实际旧布局迁移应先审查实际布局并单独制定恢复计划。
 
-本地验证包括 C 状态机、实际加载器调用层（模拟 Registry ELF 执行）、C JSON 解析、NVS 包格式及 ESP-IDF 构建。模拟执行不等于真机刷新。实际覆盖范围与尚未验证项目见 [实机记录](docs/validation-multi-app-hardware.md)。
+本地验证包括 C 目录/状态机、加载器调用层、JSON/NVS、manager 与运行恢复；真实范围见 [验证目录](docs/README.md)。模拟通过不是实机显示证明。

@@ -4,6 +4,11 @@ BLE belongs to the resident host. It is available without working Wi-Fi, valid S
 Wi-Fi JSON, or a running application. It never updates the host firmware or the
 partition table. Applications are still trusted native ELF code, not a sandbox.
 
+This is the resident framework's wire reference. New application business
+protocols belong to the application. The photoframe-owned receive
+route is implemented in the sibling application; existing host image opcodes remain compatibility features
+and are not being extended. See the [developer Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Home.md).
+
 ## Discovery
 
 The peripheral advertises every 200–300 ms with flags `0x06` and the complete
@@ -213,6 +218,11 @@ Reference APIs: [ESP-IDF NimBLE](https://docs.espressif.com/projects/esp-idf/en/
 [Windows Runtime thread cleanup](https://learn.microsoft.com/en-us/windows/win32/api/roapi/nf-roapi-rouninitialize).
 
 ## Images without Wi-Fi (v1 additive extension)
+
+**Compatibility implementation, host b4709c0.** This section records the already
+tested host-owned PNG route. New image reception is implemented in the
+[photoframe ABI 2.1 service](https://github.com/M1nt-Ch0c0/photoframe/blob/main/docs/ble-image-input.md),
+with host authentication and display kept generic.
 
 Discovery version and service UUIDs remain unchanged. Authenticate first and send
 `IMAGE_CAPS`; an older host returns code 4, so clients fail explicitly instead of
