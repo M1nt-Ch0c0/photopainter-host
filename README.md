@@ -2,7 +2,7 @@
 
 当前实现提供 **ABI 2.2 单所有权 L2CAP CoC**：前台 APP 非阻塞收发，GATT 保留管理职责。2026-10-27 已更新实机宿主并完成 photoframe v20 CoC 推图，接口和证据见 [ABI 2.2 CoC](docs/abi-2-2-coc.md)。
 
-**源码基线：此前 main 包含 ABI 2.1，当前迭代在 CoC 开发分支。** 工作区构建、正式提交与实机部署分别记录；控制台现为独立 photopainter-console 仓库。实机验收范围见 [代码与证据](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Status-and-Evidence.md)。
+**源码基线：ABI 2.2 功能提交 `f742a47` 已推送 main。** 控制台现为独立 photopainter-console 仓库；源码提交、部署和验证范围分别记录。实机验收范围见 [代码与证据](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Status-and-Evidence.md)。
 
 本仓库是 ESP32-S3 PhotoPainter 的常驻框架：负责设备通信、鉴权、独立应用安装、ELF 加载、统一调度、切换与宿主服务。业务页面、图片解码和应用自身协议属于 APP。
 
