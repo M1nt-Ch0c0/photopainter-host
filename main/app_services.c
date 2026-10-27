@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "app_services.h"
 #include "app_ble.h"
+#include "app_coc.h"
 #include "photopainter_board.h"
 #include "esp_timer.h"
 #include "esp_system.h"
@@ -36,9 +37,9 @@ esp_err_t app_services_init(void) {
 void app_services_open(const char *id,uint32_t gen) {
     strncpy(current,id,sizeof(current)-1);current[sizeof(current)-1]=0;
     generation=gen;timer_interval=0;context=NULL;
-    app_ble_bind(gen);
+    app_ble_bind(gen);app_coc_bind(gen);
 }
-void app_services_close(void) {app_ble_cancel();timer_interval=0;context=NULL;current[0]=0;}
+void app_services_close(void) {app_coc_cancel();app_ble_cancel();timer_interval=0;context=NULL;current[0]=0;}
 esp_err_t app_services_begin(const app_context_v2_t *c) {
     if(context||!c||c->generation!=generation)return ESP_ERR_INVALID_STATE;
     displayed=display_called=borrowed=false;
@@ -120,3 +121,15 @@ int32_t app_host_ble_set_v2(uint32_t index,const uint8_t *data,uint32_t size) {
 int32_t app_host_ble_unregister_v2(void) {
     return active()?app_ble_unregister(generation):APP_ERR_RUNTIME;
 }
+static bool coc_active(void){return active() && context->abi_minor>=2;}
+int32_t app_host_coc_open_v22(const app_coc_config_v22_t *c){
+    return coc_active() && context->event!=APP_EVENT_STOP?app_coc_open(generation,c):APP_ERR_RUNTIME;
+}
+int32_t app_host_coc_info_v22(app_coc_info_v22_t *i){return coc_active()?app_coc_info(generation,i):APP_ERR_RUNTIME;}
+int32_t app_host_coc_recv_v22(uint32_t s,void *p,uint32_t n,uint32_t *r){
+    return coc_active() && context->event!=APP_EVENT_STOP?app_coc_recv(generation,s,p,n,r):APP_ERR_RUNTIME;
+}
+int32_t app_host_coc_send_v22(uint32_t s,const void *p,uint32_t n){
+    return coc_active() && context->event!=APP_EVENT_STOP?app_coc_send(generation,s,p,n):APP_ERR_RUNTIME;
+}
+int32_t app_host_coc_close_v22(void){return coc_active()?app_coc_close(generation):APP_ERR_RUNTIME;}

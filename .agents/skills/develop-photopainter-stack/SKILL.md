@@ -1,15 +1,15 @@
 ---
 name: develop-photopainter-stack
-description: Bootstrap, build, deploy, continue development, and diagnose the three-repository ESP32-S3 PhotoPainter stack made of photopainter-host, photoframe, and ai-quota-frame. Use when Codex starts in a new computer or checkout, installs ESP-IDF, Go, Chrome, or serial tools, coordinates changes across the repositories, builds or flashes firmware, provisions Wi-Fi and push authentication, sends a frame, or debugs USB, Wi-Fi, HTTP, ELF loading, PNG validation, and Spectra 6 refreshes.
+description: Bootstrap, build, deploy, continue development, and diagnose the ESP32-S3 PhotoPainter stack spanning photopainter-host, photoframe, ai-quota-frame, photopainter-console and the esp32s3 Wiki. Use when Codex starts in a new computer or checkout, installs ESP-IDF, Go, Chrome, or serial tools, coordinates changes across the repositories, builds or flashes firmware, provisions Wi-Fi and push authentication, sends a frame, or debugs USB, Wi-Fi, HTTP, ELF loading, PNG validation, and Spectra 6 refreshes.
 ---
 
 # Develop PhotoPainter Stack
 
-Treat `photopainter-host`, `photoframe`, and `ai-quota-frame` as one deployed system with separate repositories. Preserve their boundaries and validate the complete path from source to physical display.
+Treat `photopainter-host`, `photoframe`, `ai-quota-frame`, and the independent `photopainter-console` as one deployed system with separate repositories; `esp32s3` owns the shared Wiki. Preserve their boundaries and validate the complete path from source to physical display.
 
 ## Start every task
 
-1. Locate the three sibling checkouts. Do not assume a port, device IP, operating system, or workspace path.
+1. Locate the relevant sibling checkouts, including `photopainter-console` for GUI work. Do not assume a port, device IP, operating system, or workspace path.
 2. Read the complete `AGENTS.md` in every repository that the task may change.
 3. Read the relevant reference before acting:
    - New computer, toolchain, or checkout: [bootstrap.md](references/bootstrap.md)

@@ -5,6 +5,7 @@
 #include "app_manager.h"
 #include "app_runtime.h"
 #include "app_ble.h"
+#include "ble_coc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -37,6 +38,7 @@ static size_t response_size;
 static uint16_t connection=BLE_HS_CONN_HANDLE_NONE;
 static uint32_t epoch,challenge_epoch;
 static bool synced,pending,processing,authenticated;
+static uint8_t coc_auth_key[32];
 static atomic_bool started;
 static uint32_t fragment_target,request_target;
 static pp_ble_fragments fragments;
@@ -58,6 +60,11 @@ static int access_gatt(uint16_t,uint16_t,struct ble_gatt_access_ctxt *,void *);
 
 static void take(void) {xSemaphoreTake(lock,portMAX_DELAY);}
 static void give(void) {xSemaphoreGive(lock);}
+bool photopainter_ble_coc_key(uint16_t conn,uint8_t key[32]) {
+    take();bool ok=authenticated && connection==conn;
+    if(ok)memcpy(key,coc_auth_key,32);
+    give();return ok;
+}
 static uint64_t now_ms(void) {return (uint64_t)esp_timer_get_time()/1000;}
 static int gap_event(struct ble_gap_event *,void *);
 
@@ -322,9 +329,13 @@ static void transport_worker(void *arg) {
                 memcpy(response,out,n);response_size=n;processing=false;
                 if(authenticated!=session->authenticated) {
                     authenticated=session->authenticated;app_ble_connection(authenticated);
+                    if(authenticated)memcpy(coc_auth_key,session->key,32);
+                    else memset(coc_auth_key,0,32);
                 }
             }give();
         }
+        if(conn!=BLE_HS_CONN_HANDLE_NONE && photopainter_coc_active(conn))session->touched=now_ms();
+        photopainter_coc_wakeup();
         if(conn!=BLE_HS_CONN_HANDLE_NONE && pp_ble_expire(session,now_ms()))
             schedule_termination(local_epoch,conn);
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -333,10 +344,12 @@ static void transport_worker(void *arg) {
 static void on_sync(void) {
     int rc=ble_hs_util_ensure_addr(0);
     if(!rc) rc=ble_hs_id_infer_auto(0,&own_addr_type);
+    if(!rc) rc=photopainter_coc_start();
     if(rc) {ESP_LOGE("ble","address setup failed: %d",rc);return;}
     take();synced=true;schedule_advertise();give();photopainter_ble_app_changed();
 }
 static void on_reset(int reason) {
+    photopainter_coc_reset();
     take();synced=false;connection=BLE_HS_CONN_HANDLE_NONE;epoch++;
     authenticated=false;app_ble_connection(false);
     subscribed=0;
@@ -357,6 +370,7 @@ esp_err_t photopainter_ble_start(const char *token) {
     memcpy(device_token,token,strlen(token)+1);
     uint8_t boot[16];esp_fill_random(boot,sizeof(boot));pp_ble_images_init(&image_receipts,boot);
     err=nimble_port_init();if(err!=ESP_OK) return err;
+    if(photopainter_coc_init()!=0)return ESP_ERR_NO_MEM;
     ble_svc_gap_init();ble_svc_gatt_init();ble_svc_gap_device_name_set("PhotoPainter");
     ble_npl_event_init(&advertise_event,advertise,NULL);
     ble_npl_event_init(&app_event,app_changed,NULL);

@@ -37,7 +37,7 @@ def manifest(data):
     if s[1]!=1 or s[2]&1 or s[5]!=128: fail()
     values=struct.unpack("<6I32s64s2I",span(s[4],s[5]))
     magic,size,major,minor,inputs,flags,appid,name,r0,r1=values
-    if (magic,size,major)!=(0x32505041,128,2) or minor>1 or inputs&~1 or flags&~1 or r0 or r1: fail()
+    if (magic,size,major)!=(0x32505041,128,2) or minor>2 or inputs&~1 or flags&~1 or r0 or r1: fail()
     appid=string(appid,0);name=string(name,0)
     if not re.fullmatch(r"[a-z0-9_-]{1,31}",appid) or not name or any(not 32<=ord(c)<=126 for c in name): fail()
     symbols=False
@@ -53,5 +53,6 @@ def manifest(data):
             name_=string(strings,k)
             if index==0 and name_ and name_ not in ALLOWED: fail()
             if index==0 and name_.startswith("app_host_ble_") and minor<1: fail()
+            if index==0 and name_.startswith("app_host_coc_") and minor<2: fail()
     if not symbols: fail()
     return dict(id=appid,name=name,abi=major,minor=minor,inputs=inputs,flags=flags)

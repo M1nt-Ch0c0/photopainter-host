@@ -60,6 +60,11 @@ extern int app_host_wall_time_v2;
 extern int app_host_ble_register_v2;
 extern int app_host_ble_set_v2;
 extern int app_host_ble_unregister_v2;
+extern int app_host_coc_open_v22;
+extern int app_host_coc_info_v22;
+extern int app_host_coc_recv_v22;
+extern int app_host_coc_send_v22;
+extern int app_host_coc_close_v22;
 #pragma GCC diagnostic pop
 esp_elf_symbol_table_t g_esp_photoframe_elfsyms[] = {
     ESP_ELFSYM_EXPORT(longjmp),
@@ -120,4 +125,9 @@ esp_elf_symbol_table_t g_esp_photoframe_elfsyms[] = {
     ESP_ELFSYM_EXPORT(app_host_ble_register_v2),
     ESP_ELFSYM_EXPORT(app_host_ble_set_v2),
     ESP_ELFSYM_EXPORT(app_host_ble_unregister_v2),
+    ESP_ELFSYM_EXPORT(app_host_coc_open_v22),
+    ESP_ELFSYM_EXPORT(app_host_coc_info_v22),
+    ESP_ELFSYM_EXPORT(app_host_coc_recv_v22),
+    ESP_ELFSYM_EXPORT(app_host_coc_send_v22),
+    ESP_ELFSYM_EXPORT(app_host_coc_close_v22),
     ESP_ELFSYM_END};

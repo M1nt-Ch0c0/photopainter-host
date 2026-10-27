@@ -117,6 +117,7 @@ int photoframe_plugin_slot(void){return slot;}
 uint32_t photoframe_plugin_version(void){return version;}
 bool photoframe_plugin_is_ready(void){return loaded;}
 uint32_t app_runtime_abi(void){return abi;}
+uint32_t app_runtime_abi_minor(void){return loaded&&abi==2?manifest.abi_minor:0;}
 uint32_t app_runtime_generation(void){return generation;}
 bool app_runtime_ready(void){return runtime_ready;}
 bool app_runtime_last_display(void){return last_display;}
@@ -154,6 +155,12 @@ int app_runtime_event(uint32_t type,uint32_t timer) {
 int app_runtime_ble(const app_ble_event_v2_t *event) {
     if(abi!=2 || !runtime_ready || manifest.abi_minor<1)return APP_ERR_UNSUPPORTED;
     int result=dispatch(APP_EVENT_BLE,0,(const uint8_t *)event,sizeof(*event));
+    if(result==APP_ERR_RUNTIME)(void)app_runtime_shutdown();
+    return result;
+}
+int app_runtime_coc(const app_coc_event_v22_t *event) {
+    if(abi!=2 || !runtime_ready || manifest.abi_minor<2)return APP_ERR_UNSUPPORTED;
+    int result=dispatch(APP_EVENT_COC,0,(const uint8_t *)event,sizeof(*event));
     if(result==APP_ERR_RUNTIME)(void)app_runtime_shutdown();
     return result;
 }

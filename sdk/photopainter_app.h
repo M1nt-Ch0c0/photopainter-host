@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: MIT
- * PhotoPainter application ABI 2.1. Canonical source: photopainter-host/sdk.
+ * PhotoPainter application ABI 2.2. Canonical source: photopainter-host/sdk.
  * Plain ELF32 C ABI; no ESP-IDF types or application callbacks cross this ABI.
  */
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
 #define APP_ABI_MAJOR 2u
-#define APP_ABI_MINOR 1u
+#define APP_ABI_MINOR 2u
 #define APP_MANIFEST_MAGIC 0x32505041u
 #define APP_FRAME_WIDTH 800u
 #define APP_FRAME_HEIGHT 480u
@@ -19,6 +19,7 @@
 #define APP_EVENT_NETWORK 4u
 #define APP_EVENT_STOP 5u
 #define APP_EVENT_BLE 6u
+#define APP_EVENT_COC 7u
 #define APP_READY 1u
 #define APP_OK 0
 #define APP_ERR_ARGUMENT (-1)
@@ -56,6 +57,9 @@ _Static_assert(sizeof(app_manifest_v2_t)==128,"manifest ABI");
 #define APP_MANIFEST_BLE(ID, NAME, INPUTS, FLAGS) \
     __attribute__((used,visibility("default"),section(APP_MANIFEST_SECTION),aligned(4))) \
     const app_manifest_v2_t app_manifest = {APP_MANIFEST_MAGIC,128,2,1,INPUTS,FLAGS,ID,NAME,{0,0}}
+#define APP_MANIFEST_COC(ID, NAME, INPUTS, FLAGS) \
+    __attribute__((used,visibility("default"),section(APP_MANIFEST_SECTION),aligned(4))) \
+    const app_manifest_v2_t app_manifest = {APP_MANIFEST_MAGIC,128,2,2,INPUTS,FLAGS,ID,NAME,{0,0}}
 typedef struct {
     uint32_t size, abi_major, abi_minor, event, event_id, generation;
     uint32_t input_type, data_size;
@@ -119,6 +123,42 @@ _Static_assert(sizeof(app_ble_event_v2_t)==140,"BLE event ABI");
 int32_t app_host_ble_register_v2(const app_ble_service_v2_t *service);
 int32_t app_host_ble_set_v2(uint32_t characteristic,const uint8_t *data,uint32_t bytes);
 int32_t app_host_ble_unregister_v2(void);
+/* ABI 2.2: one foreground owner and one authenticated CoC connection.
+ * These I/O statuses are not app_complete statuses. All calls are nonblocking.
+ * Records are copied; no APP pointer/callback survives an entry invocation.
+ * Closing/unloading discards queued records. Disconnect preserves registration.
+ */
+#define APP_COC_OK 0
+#define APP_COC_AGAIN 1
+#define APP_COC_CLOSED 2
+#define APP_COC_STALE 3
+#define APP_COC_TOO_SMALL 4
+#define APP_COC_BUSY 5
+#define APP_COC_CONNECTED 1u
+#define APP_COC_DISCONNECTED 2u
+#define APP_COC_RX_READY 4u
+#define APP_COC_TX_READY 8u
+#define APP_COC_ERROR 16u
+typedef struct {
+    uint32_t size, rx_sdu_bytes, rx_slots, tx_slots;
+} app_coc_config_v22_t;
+typedef struct {
+    uint32_t size, state, psm, session, rx_payload_max, tx_payload_max;
+} app_coc_info_v22_t;
+typedef struct {
+    uint32_t size, type, session, rx_pending, tx_free;
+    int32_t status;
+} app_coc_event_v22_t;
+_Static_assert(sizeof(app_coc_config_v22_t)==16,"CoC config ABI");
+_Static_assert(sizeof(app_coc_info_v22_t)==24,"CoC info ABI");
+_Static_assert(sizeof(app_coc_event_v22_t)==24,"CoC event ABI");
+int32_t app_host_coc_open_v22(const app_coc_config_v22_t *config);
+int32_t app_host_coc_info_v22(app_coc_info_v22_t *info);
+/* TOO_SMALL reports required bytes without consuming the record. */
+int32_t app_host_coc_recv_v22(uint32_t session,void *dst,uint32_t capacity,uint32_t *received);
+/* OK means copied into the host queue, not remote business completion. */
+int32_t app_host_coc_send_v22(uint32_t session,const void *src,uint32_t bytes);
+int32_t app_host_coc_close_v22(void);
 static inline void app_complete(const app_context_v2_t *c,int32_t status,uint32_t flags) {
     app_result_v2_t r={sizeof(r),c->event_id,c->generation,status,flags};
     app_host_complete_v2(&r);

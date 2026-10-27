@@ -2,7 +2,7 @@
 
 Canonical current contracts: [ABI 2 runtime](../../../../docs-runtime-v2.md), [five-bank storage and Wi-Fi](../../../../docs-multi-apps.md), and [reader-facing diagrams](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/ARCHITECTURE.md).
 
-- `ai-quota-frame` owns quota access, layout, strict six-color PNG and outbound pushing. It does not select device apps and must not listen on the retired :8787 port.
+- `ai-quota-frame` owns quota access, layout, strict six-color PNG, outbound pushing and the serialized device backend. The independent `photopainter-console` repository owns the native GUI and calls that backend over its protected local socket. Automatic pushing does not select device apps and must not listen on the retired :8787 port.
 - `photopainter-host` owns HTTP/authentication, SD/NVS Wi-Fi, catalog, the only manager worker, ELF ABI dispatch, bounded services and ABI 2 board I/O.
 - `photoframe` owns PNG validation, logical graphics, initial pages and application restoration. Its default app ELF uses ABI 2; `PHOTOFRAME_ABI=1` and `.so` retain legacy board code.
 - `esp32s3` owns navigation and explanation; it participates in no build.
@@ -15,4 +15,4 @@ PNG generation and decoding preserve opaque exact black/white/yellow/red/blue/gr
 
 Wi-Fi JSON authority, atomic .tmp/.bak migration/save and all credential boundaries are unchanged. No app receives Wi-Fi credentials or host usage keys. Runtime cache is optional RAM, not SD persistence. No WebUI, whole-firmware OTA, background app tasks or new public service is added.
 
-The framework/application boundary and current API guide are maintained in the [developer Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Home.md). The approved next image route lives in the photoframe ABI 2.1 application; the tested host-specific image path remains compatibility code and is not being extended. App-owned receive has not been implemented in this documentation baseline. Keep framework entry documentation about generic services and app management; business input/sending commands belong to app/client guides.
+The framework/application boundary and current API guide are maintained in the [developer Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Home.md). The current image route is app-owned: photoframe v20 uses ABI 2.2 single-owner CoC, while its ABI 2.1 GATT route remains compatible. A real Mac CoC transfer and physical completion receipt were recorded on 2026-10-27. The older host-specific image path remains compatibility code. Keep framework entry documentation about generic services and app management; business input/sending commands belong to app/client guides.

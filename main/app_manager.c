@@ -5,6 +5,7 @@
 #include "app_catalog.h"
 #include "app_button.h"
 #include "app_ble.h"
+#include "app_coc.h"
 #include "wifi_sd.h"
 #include "cJSON.h"
 #include "driver/gpio.h"
@@ -51,6 +52,7 @@ static void update_snapshot(void) {
     cJSON *o=cJSON_CreateObject();if(!o)return;
     cJSON_AddNumberToObject(o,"abi",1); /* legacy envelope, not current payload ABI */
     cJSON_AddNumberToObject(o,"payload_abi",app_runtime_abi());
+    cJSON_AddNumberToObject(o,"payload_abi_minor",app_runtime_abi_minor());
     cJSON_AddNumberToObject(o,"active",state.active);cJSON_AddNumberToObject(o,"previous",state.previous);
     cJSON_AddNumberToObject(o,"pending",state.pending);cJSON_AddNumberToObject(o,"trial",state.trial);
     cJSON_AddNumberToObject(o,"loaded",photoframe_plugin_slot());cJSON_AddNumberToObject(o,"version",photoframe_plugin_version());
@@ -74,6 +76,13 @@ static void update_snapshot(void) {
     char ble_uuid[33]={0};
     if(ble_registered)for(unsigned i=0;i<16;i++)snprintf(ble_uuid+2*i,3,"%02x",ble_schema.uuid[i]);
     cJSON_AddStringToObject(o,"ble_service_uuid",ble_uuid);
+    app_coc_info_v22_t ci={.size=sizeof(ci)};
+    if(app_coc_info(app_runtime_generation(),&ci)==APP_COC_OK){
+        cJSON_AddNumberToObject(o,"coc_version",ci.state?1:0);
+        cJSON_AddNumberToObject(o,"coc_psm",ci.state?ci.psm:0);
+        cJSON_AddNumberToObject(o,"coc_state",ci.state);
+        cJSON_AddNumberToObject(o,"coc_rx_payload_max",ci.rx_payload_max);
+    }
     cJSON *apps=cJSON_AddArrayToObject(o,"apps");
     for(int i=0;c&&i<APP_LIMIT;i++) {
         const app_entry_t *a=&c->apps[i];if(!a->id[0])continue;
@@ -182,7 +191,9 @@ static void run(void *unused) {
             bool tick=!network&&app_services_timer_due(&timer);
             app_ble_event_v2_t ble_event;
             bool ble=!network&&!tick&&app_ble_take(app_runtime_generation(),&ble_event);
-            if(!network&&!tick&&!ble){xSemaphoreGive(admission);continue;}
+            app_coc_event_v22_t coc_event;
+            bool coc=!network&&!tick&&!ble&&app_coc_take(app_runtime_generation(),&coc_event);
+            if(!network&&!tick&&!ble&&!coc){xSemaphoreGive(admission);continue;}
             atomic_store(&busy,true);atomic_fetch_add(&epoch,1);
             bool event=false;
             if(network) {
@@ -192,7 +203,14 @@ static void run(void *unused) {
             }
             if(tick) {phase="timer";last_result=app_runtime_event(APP_EVENT_TIMER,timer);event=true;}
             if(ble) {phase="ble";last_result=app_runtime_ble(&ble_event);event=true;}
-            if(event){phase=photoframe_plugin_is_ready()?"idle":"fault";update_snapshot();}
+            if(coc) {phase="coc";last_result=app_runtime_coc(&coc_event);event=true;}
+            if(event){
+                phase=photoframe_plugin_is_ready()?"idle":"fault";
+                /* Catalog snapshots read ELF manifests from Flash. A bulk-data
+                 * readiness event must not rescan every slot for every batch. */
+                if(!coc || (coc_event.type&(APP_COC_CONNECTED|APP_COC_DISCONNECTED|APP_COC_ERROR)) ||
+                   last_result!=APP_OK || app_runtime_last_display())update_snapshot();
+            }
             app_manager_release();
         }
     }

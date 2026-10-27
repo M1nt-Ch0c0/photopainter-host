@@ -1,6 +1,6 @@
 # PhotoPainter host agent guide
 
-**Source and documentation baseline:** main includes the resident BLE/ABI 2.1 framework, photoframe-owned image reception and its desktop client. See the [version/status matrix](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Status-and-Evidence.md) for source commits and remaining hardware acceptance limits.
+**Current development baseline (2026-10-27):** ABI 2.2 single-owner L2CAP CoC, photoframe v20 and the Mac sender have been deployed with a real completion receipt. The SwiftUI console lives in the independent `photopainter-console` repository; `ai-quota-frame` retains the serialized device backend. Source publication, current slots and verification limits are tracked in the [status matrix](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Status-and-Evidence.md).
 
 This is the canonical entry point for AI-assisted work on the three-repository PhotoPainter system. For a new computer, deployment, cross-repository change, or hardware investigation, read the complete project skill at [.agents/skills/develop-photopainter-stack/SKILL.md](.agents/skills/develop-photopainter-stack/SKILL.md) before acting.
 

@@ -1,6 +1,8 @@
 # PhotoPainter Host 应用框架
 
-**源码状态：main 已包含常驻 BLE 与 ABI 2.1 功能。** 宿主实现基线为 `b4709c0`；配套相框 APP 收图和桌面客户端也合入各仓 main。实机验收范围见 [代码与证据](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Status-and-Evidence.md)。
+当前实现提供 **ABI 2.2 单所有权 L2CAP CoC**：前台 APP 非阻塞收发，GATT 保留管理职责。2026-10-27 已更新实机宿主并完成 photoframe v20 CoC 推图，接口和证据见 [ABI 2.2 CoC](docs/abi-2-2-coc.md)。
+
+**源码基线：此前 main 包含 ABI 2.1，当前迭代在 CoC 开发分支。** 工作区构建、正式提交与实机部署分别记录；控制台现为独立 photopainter-console 仓库。实机验收范围见 [代码与证据](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Status-and-Evidence.md)。
 
 本仓库是 ESP32-S3 PhotoPainter 的常驻框架：负责设备通信、鉴权、独立应用安装、ELF 加载、统一调度、切换与宿主服务。业务页面、图片解码和应用自身协议属于 APP。
 
@@ -12,13 +14,13 @@
 |---|---|
 | 通信与鉴权 | Wi-Fi 配置/连接、HTTP 管理、常驻 NimBLE 外设、设备发现和双向 HMAC |
 | 应用管理 | 五个 APP、各自 A/B、备用槽上传、显式试运行、确认、回滚和有界启动恢复 |
-| 运行层 | 单 ELF 前台运行，ABI 1 兼容及 ABI 2.0/2.1 合作式事件 |
-| 宿主服务 | 六色逻辑帧显示、RAM 缓存、时间、定时器和受管应用 BLE |
-| 切换与清理 | GPIO 4 选择已确认 ABI 2 APP，STOP 后撤销定时/BLE/事件再卸载 |
+| 运行层 | 单 ELF 前台运行，ABI 1 兼容及 ABI 2.0/2.1/2.2 合作式事件 |
+| 宿主服务 | 六色逻辑帧显示、RAM 缓存、时间、定时器、受管 GATT 与单所有权 CoC |
+| 切换与清理 | GPIO 4 选择已确认 ABI 2 APP，STOP 后撤销定时/GATT/CoC/事件再卸载 |
 
-当前 SDK 向 APP 提供网络连接状态和受管 BLE，尚未提供通用 Wi-Fi socket / HTTP client ABI。应用是受信任原生代码，不是隔离进程。
+当前 SDK 向 APP 提供网络连接状态、受管 GATT 和 CoC，尚未提供通用 Wi-Fi socket / HTTP client ABI。应用是受信任原生代码，不是隔离进程。
 
-2026-10-23 确定的开发方向是：相框 APP 通过 ABI 2.1 实现分块收图、校验、断线处理与完成回执，宿主继续提供通用通信、鉴权、OTA、调度和显示。该 APP 已实现并随配套客户端合入各仓 main，已完成部分实测，仍有剩余验收，见 [设计与验收要求](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/BLE-Image-App-Roadmap.md)。保留旧兼容通道，不继续扩展专用 PNG 宿主协议。
+相框 APP 保留自己的收图、校验、断线处理与完成回执；宿主提供通用通信、鉴权、OTA、调度和显示。2026-10-27 的 CoC 扩展改善连续传输，不把 PNG 业务移回宿主。当前验收范围见 [状态页](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Status-and-Evidence.md)。保留旧兼容通道，不继续扩展专用 PNG 宿主协议。
 
 ## 框架开发与验证
 

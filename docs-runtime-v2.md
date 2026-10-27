@@ -1,5 +1,7 @@
 # 应用运行层 ABI 2 使用与维护
 
+ABI 2.2 增加单前台所有权 CoC 和 `APP_EVENT_COC`，保留已有布局与 2.0/2.1 语义。接口、非阻塞状态码及回收规则见 [CoC 专项说明](docs/abi-2-2-coc.md)。
+
 本页描述已实现的框架运行接口；开发入门见 [Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Home.md)。固定 ESP-IDF `5e6f53cdb31fe5708eae3f55af9737be2822db22` 与 Registry elf_loader 1.3.3。不同日期的实机证据见 [参考目录](docs/README.md)，不能只凭旧验收记录判断当前设备版本。
 
 兼容扩展 **ABI 2.1** 提供三个受管服务：注册应用 GATT、设置值和注销。`APP_MANIFEST` 保持 2.0，使用新服务时声明 `APP_MANIFEST_BLE`（2.1）。布局不变，旧 ABI 1/2.0 继续运行；不支持 2.1 的旧宿主会拒绝新包。发现、鉴权和应用 OTA 常驻宿主；photoframe APP 已实现图片接收协议，见 [应用协议](https://github.com/M1nt-Ch0c0/photoframe/blob/main/docs/ble-image-input.md)。现有宿主 PNG 路径只作兼容保留。协议和限制见 [BLE 参考](docs/ble-protocol.md)。

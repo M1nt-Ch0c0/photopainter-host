@@ -18,6 +18,8 @@ cd photopainter-workspace
 git clone https://github.com/M1nt-Ch0c0/photopainter-host.git
 git clone https://github.com/M1nt-Ch0c0/photoframe.git
 git clone https://github.com/M1nt-Ch0c0/ai-quota-frame.git
+git clone https://github.com/M1nt-Ch0c0/photopainter-console.git
+git clone https://github.com/M1nt-Ch0c0/esp32s3.git
 ```
 
 Read each repository's `AGENTS.md` before making changes. Keep the sibling layout for convenience; the host no longer depends on `PHOTOFRAME_COMPONENT_DIR`.
@@ -81,7 +83,7 @@ make check
 
 Set `CHROME_BIN` only when automatic Chrome discovery fails. Populate `.env` locally with independently generated values. Never display or commit `.env`, and never reuse a management key as `PHOTOFRAME_PUSH_TOKEN`.
 
-Linux service deployment uses `deploy/ai-quota-frame.service`. For interactive Windows use, load `.env` into the process environment without printing values and run the native Windows build. For macOS, use `deploy/install-source-tunnel.py` and `deploy/install-macos.py` as described in the service README; keep the pusher disabled until a successful one-shot physical test. There is no inbound host HTTP port.
+Linux service deployment uses `deploy/ai-quota-frame.service`. For interactive Windows use, load `.env` into the process environment without printing values and run the native Windows build. For macOS, use `deploy/install-macos.py` with the existing private source configuration as described in the service README; the current Google ID-token gateway does not need the retired source SSH tunnel. Build the SwiftUI app separately in `photopainter-console`. Keep the pusher paused during device maintenance until its outcome is understood. There is no inbound host HTTP port.
 
 ## 7. Discover before operating hardware
 
@@ -106,4 +108,4 @@ Do not hardcode the discovered IP or port into committed files. DHCP and COM ass
 
 After backup and target verification, use the current framework deployment guide. Do not reuse historical partition writes for a five-bank device. Verify authenticated application status, then install/activate a suitable ABI 2 example through the standard manager path; no-display apps confirm without a PNG. Application business input and display tests follow the app/client guide, not a mandatory framework push workflow.
 
-For already provisioned devices, resident BLE discovery and app management do not require Wi-Fi or reprovisioning. The tested legacy host image path remains a compatibility feature; the photoframe-owned BLE image route requires the matching ABI 2.1 app and desktop client. Require an authenticated physical-completion receipt and human visual confirmation for an actual display test. Query the original receipt after an uncertain COMMIT; changed boot/missing receipt stops blind repeat. Never open serial merely to test liveness.
+For already provisioned devices, resident BLE discovery and app management do not require Wi-Fi or reprovisioning. The tested legacy host image path remains a compatibility feature; the photoframe-owned BLE image route requires matching app/client capabilities: ABI 2.2 CoC on supported clients or the retained ABI 2.1 GATT route. Require an authenticated physical-completion receipt and human visual confirmation for an actual display test. Query the original receipt after an uncertain COMMIT; changed boot/missing receipt stops blind repeat. Never open serial merely to test liveness.

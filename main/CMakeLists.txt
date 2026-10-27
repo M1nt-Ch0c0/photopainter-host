@@ -8,6 +8,8 @@ idf_component_register(
         "app_manifest.c"
         "app_services.c"
         "app_ble.c"
+        "app_coc.c"
+        "ble_coc.c"
         "app_manager.c"
         "app_button.c"
         "app_boot.c"

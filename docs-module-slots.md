@@ -1,12 +1,12 @@
 # 独立应用包、A/B 与安装管理
 
-本页是当前五 bank 框架的管理指南，覆盖 ABI 1/2.0/2.1。旧单应用 ABI 1 部署说明保留在 [历史提交](https://github.com/M1nt-Ch0c0/photopainter-host/blob/3b6f7e2/docs-module-slots.md)，不作为当前分区写入教程。
+本页是当前五 bank 框架的管理指南，覆盖 ABI 1/2.0/2.1/2.2。旧单应用 ABI 1 部署说明保留在 [历史提交](https://github.com/M1nt-Ch0c0/photopainter-host/blob/3b6f7e2/docs-module-slots.md)，不作为当前分区写入教程。
 
 ## 包与身份
 
 每 APP 固定占用一个 bank，A/B 各 1 MiB，最大五个 APP。包包括 4096 字节头和 ELF payload，总计不超过 1 MiB。format 1 仅保留旧 photoframe ABI 1；format 2 携带 32 字节 NUL 填充 APP ID，可用于 ABI 1/2。
 
-头部记录 magic `0x31464c45`、格式、ABI 主版本、长度、uint32 发布版本和 payload SHA-256。format 2 在偏移 52 增加 APP ID。ABI 2 的 ELF 另含只读 manifest：身份必须与包头和安装目标一致，导入必须在 SDK 白名单内，使用 BLE 必须声明 2.1。未知布局、能力或导入拒绝，不手工修改包头绕过校验。
+头部记录 magic `0x31464c45`、格式、ABI 主版本、长度、uint32 发布版本和 payload SHA-256。format 2 在偏移 52 增加 APP ID。ABI 2 的 ELF 另含只读 manifest：身份必须与包头和安装目标一致，导入必须在 SDK 白名单内，GATT导入要求2.1+，CoC导入要求2.2。未知布局、能力或导入拒绝，不手工修改包头绕过校验。
 
 发布版本是操作者分配的标签，不是反降级计数器；SHA-256 是完整性校验，不是作者签名。APP 是受信任原生代码，不是沙箱。
 
@@ -76,7 +76,7 @@ ABI 2 在成功 START 报告 APP_READY，并完成声明所需的真实首屏后
 
 当前五 bank 分区表保持不变；应用 OTA 不写 factory。没有宿主整机 OTA。另获授权更新宿主时，先备份全部 16 MiB 并校验 SHA-256，有 SD 按要求备份，然后只写 `0x10000` 的宿主 bin，保留 NVS、目录和应用槽。
 
-全新设备种子安装或旧两槽布局迁移必须单独审查实际分区与恢复计划，不能照抄历史固定地址。本轮开发不执行分区迁移、provision 或宿主刷写。
+全新设备种子安装或旧两槽布局迁移必须单独审查实际分区与恢复计划，不能照抄历史固定地址。本轮已按授权更新宿主factory；分区迁移、首次provision仍是独立流程，普通升级保留已有配置。
 
 ## 验证
 

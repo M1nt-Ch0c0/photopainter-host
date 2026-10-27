@@ -10,6 +10,7 @@
 | [包与 A/B](../docs-module-slots.md) | 应用构建、包、安装和回退，覆盖五 bank 和双 ABI |
 | [目录与 Wi-Fi](../docs-multi-apps.md) | 存储布局和 SD/NVS 配置优先级 |
 | [BLE 协议](ble-protocol.md) | 发现、HMAC、管理和应用特征桥接 |
+| [ABI 2.2 CoC](abi-2-2-coc.md) | 单前台所有权、非阻塞记录、会话、背压和无线封套 |
 | [兼容输入](legacy-image-input.md) | 旧 HTTP/宿主 PNG 的合同与安全约束，不是新 APP 业务开发路径 |
 
 ## 验证记录与历史
@@ -22,4 +23,4 @@
 - [Windows BLE 验证](validation-ble.md)
 - [Mac 离线图片、回执及内存](validation-ble-images.md)
 
-APP 自身收图已在 Mac 本地功能分支实现并完成部分实测，尚待最终验收和代码发布，见 [路线与验收](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/BLE-Image-App-Roadmap.md)。旧测试通过不能计为新路线验收。
+photoframe v20 已在 2026-10-27 使用 ABI 2.2 CoC 实机收图并返回物理完成回执。源码发布、最新设备目录及剩余验证范围见 [状态页](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Status-and-Evidence.md)。旧测试通过不能计为新代码全面回归。
