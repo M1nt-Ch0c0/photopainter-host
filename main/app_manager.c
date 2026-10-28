@@ -6,6 +6,8 @@
 #include "app_button.h"
 #include "app_ble.h"
 #include "app_coc.h"
+#include "app_pairing.h"
+#include "ble_transport.h"
 #include "wifi_sd.h"
 #include "cJSON.h"
 #include "driver/gpio.h"
@@ -21,9 +23,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-enum {RENDER,SELECT,ROLLBACK,STAGE,REMOVE,WIFI_READ,WIFI_SAVE,NEXT,BLE_FLUSH};
+enum {RENDER,SELECT,ROLLBACK,STAGE,REMOVE,WIFI_READ,WIFI_SAVE,NEXT,BLE_FLUSH,PAIR_BUTTON,BLE_REQUEST};
 typedef struct {
-    int op;uint32_t generation;const char *id;const char *source;const void *data;size_t size;bool update;
+    int op;uint32_t generation,authorization_epoch;const char *id;const char *source;const void *data;size_t size;bool update;
+    uint8_t *output;size_t *output_size;
     int *result;SemaphoreHandle_t done;
 } job_t;
 static QueueHandle_t jobs;
@@ -31,14 +34,37 @@ static SemaphoreHandle_t admission,snapshot_lock;
 static TaskHandle_t worker;
 static atomic_bool busy=true,network_dirty=false,network_value=false;
 static atomic_uint epoch,ignored_keys;
+static portMUX_TYPE control_lock=portMUX_INITIALIZER_UNLOCKED;
+static atomic_uint reset_pending;
+static uint32_t reset_serial;
+static atomic_bool display_busy;
 static char snapshot[4096]="{\"ready\":false,\"runtime_ready\":false,\"phase\":\"starting\"}";
 static const char *phase="starting",*source="boot";
 static int last_result;
 static char last_target[32];
+static uint32_t request_word(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
 bool app_manager_busy(void){return atomic_load(&busy);}
 uint32_t app_manager_epoch(void){return atomic_load(&epoch);}
+uint32_t app_manager_pairing_reset_pending(void){return atomic_load(&reset_pending);}
+bool app_manager_display_busy(void){return atomic_load(&display_busy);}
+bool app_manager_display_begin(void){
+    taskENTER_CRITICAL(&control_lock);
+    bool ok=!atomic_load(&reset_pending)&&!atomic_load(&display_busy);
+    if(ok)atomic_store(&display_busy,true);
+    taskEXIT_CRITICAL(&control_lock);return ok;
+}
+void app_manager_display_end(void){taskENTER_CRITICAL(&control_lock);atomic_store(&display_busy,false);taskEXIT_CRITICAL(&control_lock);}
+bool app_manager_request_pairing_reset(void){
+    taskENTER_CRITICAL(&control_lock);
+    bool ok=!atomic_load(&reset_pending);
+    if(ok){if(!++reset_serial)++reset_serial;atomic_store(&reset_pending,reset_serial);}
+    taskEXIT_CRITICAL(&control_lock);
+    if(ok)photopainter_ble_revoke();
+    return ok;
+}
 bool app_manager_acquire(void) {
-    if(!admission||xSemaphoreTake(admission,0)!=pdTRUE)return false;
+    if(atomic_load(&reset_pending)||!admission||xSemaphoreTake(admission,0)!=pdTRUE)return false;
+    if(atomic_load(&reset_pending)){xSemaphoreGive(admission);return false;}
     atomic_store(&busy,true);atomic_fetch_add(&epoch,1);return true;
 }
 void app_manager_release(void){atomic_store(&busy,false);xSemaphoreGive(admission);}
@@ -155,6 +181,7 @@ static int next_app(void) {
     return ESP_ERR_NOT_FOUND;
 }
 static int execute(const job_t *j) {
+    if(j->authorization_epoch && (atomic_load(&reset_pending)||j->authorization_epoch!=app_pairing_authorization_epoch()))return j->op==BLE_REQUEST?PP_BLE_STATE:ESP_ERR_INVALID_STATE;
     switch(j->op) {
     case RENDER:return j->generation==app_runtime_generation()?photoframe_plugin_render(j->data,j->size):APP_ERR_RUNTIME;
     case SELECT:source=j->source;snprintf(last_target,sizeof(last_target),"%s",j->id);return photoframe_plugin_select(j->id,j->update);
@@ -164,6 +191,24 @@ static int execute(const job_t *j) {
     case WIFI_READ:return wifi_sd_load(NULL,false,(wifi_profiles_t *)j->data);
     case WIFI_SAVE:return wifi_sd_save(j->data);
     case NEXT:source="button";return next_app();
+    case PAIR_BUTTON: {
+        int result=app_pairing_button(j->update,j->generation);
+        if(j->update) {
+            /* This runs only after admission, never inside an active draw. */
+            photopainter_ble_revoke();
+            app_coc_info_v22_t info={.size=sizeof(info)};uint32_t generation=0,revision=0;
+            if(app_coc_registration(&generation,&revision,NULL) && generation==app_runtime_generation() &&
+               app_coc_info(generation,&info)==APP_OK && info.session)
+                app_coc_disconnected(revision,info.session,APP_ERR_RUNTIME);
+            app_ble_event_v2_t ble_event;
+            while(app_ble_take(app_runtime_generation(),&ble_event))
+                if(app_runtime_ready())(void)app_runtime_ble(&ble_event);
+            app_coc_event_v22_t coc_event;
+            while(app_coc_take(app_runtime_generation(),&coc_event))
+                if(app_runtime_ready())(void)app_runtime_coc(&coc_event);
+        }
+        return result;
+    }
     case BLE_FLUSH: {
         if(j->generation!=app_runtime_generation())return ESP_ERR_INVALID_STATE;
         app_ble_event_v2_t event;bool written=false;
@@ -172,6 +217,18 @@ static int execute(const job_t *j) {
             if(event.type==APP_BLE_WRITTEN)written=true;
         }
         return written?ESP_OK:ESP_ERR_INVALID_STATE;
+    }
+    case BLE_REQUEST: {
+        if(j->size<12||j->size>140)return ESP_ERR_INVALID_ARG;
+        const uint8_t *p=j->data;uint32_t generation=request_word(p);
+        int result=app_ble_request(j->update,generation,request_word(p+4),request_word(p+8),p+12,j->size-12,j->output,j->output_size);
+        if(result!=PP_BLE_OK||!j->update)return result;
+        app_ble_event_v2_t event;bool written=false;
+        while(app_ble_take(generation,&event)){
+            if(app_runtime_ble(&event)!=APP_OK)return PP_BLE_STORAGE;
+            if(event.type==APP_BLE_WRITTEN)written=true;
+        }
+        return written?PP_BLE_OK:PP_BLE_STATE;
     }
     default:return ESP_ERR_INVALID_ARG;
     }
@@ -183,9 +240,30 @@ static void run(void *unused) {
         job_t j;
         if(xQueueReceive(jobs,&j,pdMS_TO_TICKS(20))==pdTRUE) {
             phase=j.op==RENDER?"display":j.op==SELECT||j.op==NEXT||j.op==ROLLBACK?"switching":"management";
-            update_snapshot();int result=execute(&j);last_result=result;phase=photoframe_plugin_is_ready()?"idle":"fault";update_snapshot();
+            update_snapshot();int result=atomic_load(&reset_pending)?(j.op==BLE_REQUEST?PP_BLE_STATE:ESP_ERR_INVALID_STATE):execute(&j);last_result=result;phase=photoframe_plugin_is_ready()?"idle":"fault";update_snapshot();
             if(j.done){*j.result=result;xSemaphoreGive(j.done);}else app_manager_release();
         } else if(xSemaphoreTake(admission,0)==pdTRUE) {
+            uint32_t resetting=atomic_load(&reset_pending);
+            if(resetting){
+                if(!photopainter_ble_reset_ready(resetting)){xSemaphoreGive(admission);continue;}
+                atomic_store(&busy,true);atomic_fetch_add(&epoch,1);phase="pairing_reset";update_snapshot();
+                job_t reset={.op=PAIR_BUTTON,.update=true};last_result=execute(&reset);
+                phase=photoframe_plugin_is_ready()?"idle":"fault";update_snapshot();
+                atomic_store(&reset_pending,0);app_manager_release();continue;
+            }
+            pp_pair_view pairing_view;
+            if(app_pairing_take_view(&pairing_view)) {
+                atomic_store(&busy,true);atomic_fetch_add(&epoch,1);
+                phase="pairing";update_snapshot();
+                int result=app_services_legacy_begin();
+                if(result==ESP_OK){result=app_pairing_draw(&pairing_view);app_services_end();}
+                app_pairing_view_complete(pairing_view.serial,result==APP_OK);
+                last_result=result;phase=photoframe_plugin_is_ready()?"idle":"fault";
+                update_snapshot();app_manager_release();continue;
+            }
+            /* Keep the physical comparison screen authoritative and the button
+             * gesture stable until confirmation/expiry. No ELF event runs here. */
+            if(app_pairing_blocks_app()){xSemaphoreGive(admission);continue;}
             uint32_t timer=0;
             bool network=atomic_exchange(&network_dirty,false);
             bool tick=!network&&app_services_timer_due(&timer);
@@ -197,8 +275,14 @@ static void run(void *unused) {
             atomic_store(&busy,true);atomic_fetch_add(&epoch,1);
             bool event=false;
             if(network) {
-                app_services_network(atomic_load(&network_value));phase="network";
-                last_result=app_runtime_event(APP_EVENT_NETWORK,0);event=true;
+                app_services_network(atomic_load(&network_value));
+                /* A faulted/absent app has no NETWORK entry to invoke. Keep
+                 * the startup failure visible instead of replacing it with
+                 * APP_ERR_UNSUPPORTED on every Wi-Fi reconnect attempt. */
+                if(app_runtime_ready()) {
+                    phase="network";
+                    last_result=app_runtime_event(APP_EVENT_NETWORK,0);event=true;
+                }
                 tick=app_services_timer_due(&timer);
             }
             if(tick) {phase="timer";last_result=app_runtime_event(APP_EVENT_TIMER,timer);event=true;}
@@ -234,15 +318,26 @@ esp_err_t app_manager_remove(const char *id){return invoke((job_t){.op=REMOVE,.i
 esp_err_t app_manager_wifi_read(wifi_profiles_t *out){return invoke((job_t){.op=WIFI_READ,.data=out});}
 esp_err_t app_manager_wifi_save(const wifi_profiles_t *in){return invoke((job_t){.op=WIFI_SAVE,.data=in});}
 esp_err_t app_manager_ble_flush(uint32_t generation){return invoke((job_t){.op=BLE_FLUSH,.generation=generation});}
+int app_manager_render_authorized(const uint8_t *p,size_t n,uint32_t a){return invoke((job_t){.op=RENDER,.generation=app_runtime_generation(),.data=p,.size=n,.authorization_epoch=a});}
+esp_err_t app_manager_select_authorized(const char *id,bool update,const char *from,uint32_t a){return invoke((job_t){.op=SELECT,.id=id,.update=update,.source=from,.authorization_epoch=a});}
+esp_err_t app_manager_rollback_authorized(const char *id,const char *from,uint32_t a){return invoke((job_t){.op=ROLLBACK,.id=id,.source=from,.authorization_epoch=a});}
+esp_err_t app_manager_stage_authorized(const char *id,const uint8_t *p,size_t n,uint32_t a){return invoke((job_t){.op=STAGE,.id=id,.data=p,.size=n,.authorization_epoch=a});}
+esp_err_t app_manager_remove_authorized(const char *id,uint32_t a){return invoke((job_t){.op=REMOVE,.id=id,.authorization_epoch=a});}
+esp_err_t app_manager_ble_request_authorized(bool write,const uint8_t *p,size_t n,uint8_t *out,size_t *size,uint32_t a){return invoke((job_t){.op=BLE_REQUEST,.data=p,.size=n,.update=write,.output=out,.output_size=size,.authorization_epoch=a});}
 static void button_task(void *unused) {
     (void)unused;app_button_t policy={0};
     for(;;) {
         /* GP4_Active=0, pull-up enabled, official button_bsp.c a5e8f757ba0c. */
-        bool was_busy=app_manager_busy();uint32_t e=app_manager_epoch();
+        bool was_busy=app_manager_busy();uint32_t serial=0;
+        unsigned pairing_state=app_pairing_state(&serial);
+        bool pairing_mode=pairing_state!=PP_PAIR_BOUND;
+        uint32_t e=pairing_mode?serial:app_manager_epoch();
         uint32_t before=policy.ignored;
-        if(app_button_sample(&policy,gpio_get_level(GPIO_NUM_4)==0,was_busy,e,esp_timer_get_time()/1000u)) {
-            if(app_manager_acquire()) {
-                job_t j={.op=NEXT};
+        enum app_button_event event=app_button_event_with_display(&policy,gpio_get_level(GPIO_NUM_4)==0,was_busy,app_manager_display_busy(),e,esp_timer_get_time()/1000u);
+        if(event!=APP_BUTTON_NONE) {
+            if(event==APP_BUTTON_RESET){if(!app_manager_request_pairing_reset())atomic_fetch_add(&ignored_keys,1);}
+            else if(app_manager_acquire()) {
+                job_t j={.op=pairing_mode?PAIR_BUTTON:NEXT,.generation=policy.epoch};
                 if(xQueueSend(jobs,&j,0)!=pdTRUE){atomic_fetch_add(&ignored_keys,1);app_manager_release();}
             } else atomic_fetch_add(&ignored_keys,1);
         }

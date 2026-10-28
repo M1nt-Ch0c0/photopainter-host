@@ -5,7 +5,7 @@
 #include "image_limits.h"
 
 /* Wire contract is documented in docs/ble-protocol.md. No RTOS or radio here. */
-#define PP_BLE_VERSION 1
+#define PP_BLE_VERSION 2
 #define PP_BLE_FRAME_MAX 512
 #define PP_BLE_INFO_SIZE 20
 #define PP_BLE_IDLE_MS 60000u

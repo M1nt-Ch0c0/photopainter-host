@@ -81,9 +81,9 @@ chmod 600 .env
 make check
 ```
 
-Set `CHROME_BIN` only when automatic Chrome discovery fails. Populate `.env` locally with independently generated values. Never display or commit `.env`, and never reuse a management key as `PHOTOFRAME_PUSH_TOKEN`.
+Set `CHROME_BIN` only when automatic Chrome discovery fails. Populate private source credentials in `.env` without displaying or committing it. BLE v2 needs no `PHOTOFRAME_PUSH_TOKEN`: a physically approved pairing creates its protected client relationship. Legacy HTTP token settings belong only to an explicit v1 deployment.
 
-Linux service deployment uses `deploy/ai-quota-frame.service`. For interactive Windows use, load `.env` into the process environment without printing values and run the native Windows build. For macOS, use `deploy/install-macos.py` with the existing private source configuration as described in the service README; the current Google ID-token gateway does not need the retired source SSH tunnel. Build the SwiftUI app separately in `photopainter-console`. Keep the pusher paused during device maintenance until its outcome is understood. There is no inbound host HTTP port.
+Linux service deployment uses `deploy/ai-quota-frame.service`. For interactive Windows use, load `.env` into the process environment without printing values and run the native Windows build. For macOS, use `deploy/install-macos.py` with the existing private source configuration described in the service README. Select the actual source authentication mode explicitly; current Manager deployments may use management keys rather than the retired Google gateway. Build the SwiftUI app separately in `photopainter-console`. Keep automatic pushing paused through maintenance and until the intended native/browser owner is paired. There is no inbound Go daemon HTTP port.
 
 ## 7. Discover before operating hardware
 
@@ -93,7 +93,10 @@ Run the doctor from `photopainter-host`:
 python3 tools/doctor.py --device-url http://DEVICE_IP/api/push
 ```
 
-The unauthenticated probe does not change the screen. A configured healthy device returns 401. Use the explicit serial probe only when a reset is acceptable:
+The doctor sends an empty unauthenticated request and does not change the screen.
+v2 returns 410 for this retired route; v1 returns 401 when configured. `GET
+/health` is the current v2 HTTP reachability check. None proves physical display
+or an authenticated relationship. Use the serial probe only when a reset is acceptable:
 
 ```bash
 python3 tools/doctor.py \
@@ -108,4 +111,6 @@ Do not hardcode the discovered IP or port into committed files. DHCP and COM ass
 
 After backup and target verification, use the current framework deployment guide. Do not reuse historical partition writes for a five-bank device. Verify authenticated application status, then install/activate a suitable ABI 2 example through the standard manager path; no-display apps confirm without a PNG. Application business input and display tests follow the app/client guide, not a mandatory framework push workflow.
 
-For already provisioned devices, resident BLE discovery and app management do not require Wi-Fi or reprovisioning. The tested legacy host image path remains a compatibility feature; the photoframe-owned BLE image route requires matching app/client capabilities: ABI 2.2 CoC on supported clients or the retained ABI 2.1 GATT route. Require an authenticated physical-completion receipt and human visual confirmation for an actual display test. Query the original receipt after an uncertain COMMIT; changed boot/missing receipt stops blind repeat. Never open serial merely to test liveness.
+After v2 firmware is loaded, use browser discovery or native `ble pair --device-id ID`, compare the six digits and short-press GPIO4 on the actual frame. Reconnect with the saved relationship, then read signed status and check the running APP. A different owner requires a physical 8-second reset; browser and native clients do not silently share keys.
+
+Resident BLE discovery and management do not require Wi-Fi or reprovisioning. The photoframe-owned image route uses ABI 2.2 CoC on supported native clients or ABI 2.1 GATT in the browser. Require an authenticated physical-completion receipt and human visual confirmation after a display test. Query the original receipt after an uncertain COMMIT; changed binding/boot/missing receipt stops blind repeat. Never open serial merely to test liveness. Pairing v2 remains 尚未实机验证 until these real actions have been recorded.

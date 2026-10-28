@@ -172,12 +172,12 @@ class WiFiTests(unittest.TestCase):
                 self.assertEqual(self.lib.photopainter_host_config_load(ctypes.byref(config)),0)
                 self.assertEqual(config.wifi.count,count)
                 if count:self.assertEqual(config.wifi.items[0].ssid,ssid)
-                self.assertEqual(bool(config.token),mode not in (0,9))
+                self.assertFalse(config.token)  # v2 never loads retired push credentials
         self.lib.mock_config_mode(8);config=HostConfig()
         self.assertEqual(self.lib.photopainter_host_config_load(ctypes.byref(config)),0)
         self.assertEqual(config.wifi.count,1)
         self.assertFalse(config.token)
-        self.assertNotEqual(config.token_status,0)
+        self.assertEqual(config.token_status,0)  # malformed retired token is irrelevant
         for mode in (4,7,11,12):
             with self.subTest(error_mode=mode):
                 self.lib.mock_config_mode(mode)

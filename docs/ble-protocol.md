@@ -1,4 +1,15 @@
-# PhotoPainter BLE protocol v1
+# PhotoPainter BLE framing and application commands
+
+**Current authentication is physical pairing v2.** Read
+[ble-pairing-v2.md](ble-pairing-v2.md) for commit/reveal, button confirmation,
+persistent ownership and BondAuth (op 23). The old fixed-token op 1 handshake
+below is historical and is rejected by current firmware. Signed operations
+2..17 and CoC continue using the framing/domains in this reference after the new
+BondAuth session key has been established.
+
+**尚未实机验证 / not hardware-validated:** this reference describes current
+source and offline checks. Historical BLE captures below do not prove that the
+new physical-button ceremony has run on a device.
 
 BLE belongs to the resident host. It is available without working Wi-Fi, valid SD
 Wi-Fi JSON, or a running application. It never updates the host firmware or the
@@ -14,11 +25,12 @@ and are not being extended. See the [developer Wiki](https://github.com/M1nt-Ch0
 The peripheral advertises every 200–300 ms with flags `0x06` and the complete
 128-bit service UUID `7b9d0001-6c82-4f31-9a48-6f5061696e74`. The scan response
 contains manufacturer data (experimental company ID `0xffff`, little endian)
-followed by this 20-byte record, and the short name `PPBLE`:
+followed by this 20-byte record. Current advertisement data carries the name
+`PP-XXXX` (last four stable-ID hexadecimal digits); legacy devices used `PPBLE`:
 
 | Offset | Bytes | Meaning |
 |---|---:|---|
-| 0 | 1 | Protocol version, 1 |
+| 0 | 1 | Protocol version, 2 (legacy token firmware: 1) |
 | 1 | 1 | 0 offline, 1 connecting, 2 IPv4 ready, 3 invalid Wi-Fi configuration |
 | 2 | 6 | Stable device ID: factory Wi-Fi station MAC, displayed as 12 hex digits |
 | 8 | 4 | IPv4 in network byte order; zero unless state is 2 |
@@ -50,7 +62,8 @@ broadcaster role is enabled. UUIDs below share suffix
 | `7b9d0004` | Request | Write with response; bounded application framing below |
 | `7b9d0005` | Response | Read a complete response, up to 512 bytes; ATT long reads supported |
 
-Only discovery and authentication bootstrap are available before authentication.
+Only discovery and the pairing/authentication bootstrap operations described in
+the v2 contract are available before authentication.
 The response characteristic returns a single zero byte while a request is pending.
 This is not an authenticated acknowledgement or success. Poll with a delay
 (the Go client uses 25 ms). Response bytes remain fixed until the next complete
@@ -64,7 +77,10 @@ duplicate fragments are accepted. Holes, conflicting overlaps, invalid sizes,
 and writes while a request is executing receive an ATT error. Only one request
 can be outstanding; responses must be consumed before sending the next request.
 
-## Authentication and threat model
+## Historical v1 authentication and threat model
+
+This fixed-token handshake is retained to explain older captures, not as an
+accepted migration/fallback path. Pairing v2 rejects op 1 even while unbound.
 
 There is no pairing, bonding, or link encryption. Authentication uses the existing
 32–128 byte device push token as an HMAC-SHA256 key. The token never crosses BLE.
@@ -89,7 +105,9 @@ malformed attempts. Reconnect for a new nonce after failure. Both directional
 tags and the session key have different domains. Nonces come from ESP hardware
 randomness after radio initialization and the computer's cryptographic RNG.
 
-After authentication every command is:
+## Signed command envelope (current v2 and historical v1)
+
+After BondAuth in v2 (or the historical handshake in v1), every command is:
 
 `op:u8 || sequence:u32 || payload || HMAC(K, "pp-ble-v1/request" || preceding_bytes)`
 
@@ -125,7 +143,7 @@ then NUL padding. Package bytes are exactly `tools/module.py package` output.
 
 | Op | Command | Request payload | Successful response payload |
 |---:|---|---|---|
-| 1 | Authenticate | See handshake | Discovery record |
+| 1 | Historical token Authenticate | Rejected in v2 | Unsigned rejection, never a session |
 | 2 | Discovery, authenticated | Empty | Discovery record |
 | 3 | Status / application list | `offset:u32` | `total:u32, offset:u32, JSON page` (up to 400 bytes) |
 | 4 | Begin | `package_size:u32, full_package_sha256:32, app_id:32` | Received offset `u32` |
@@ -150,7 +168,7 @@ changing NVS. They are diagnostic metadata, not a new installation state.
 Status offset zero freezes the existing App Manager JSON snapshot in this
 session. Subsequent pages refer to that same snapshot. It contains the same
 application catalog, selected/trial/loaded app, ready/confirmed flags and memory
-fields as HTTP. Repeating Begin with identical metadata returns the current
+fields as the historical HTTP status envelope. Repeating Begin with identical metadata returns the current
 offset. Duplicate package chunks must match the buffered bytes exactly.
 Package size is 4148 through 1048576 bytes. The whole-package SHA is additional
 transport protection; the existing installer also checks payload SHA, ELF,
@@ -160,8 +178,8 @@ manifest/imports, ABI and package identity before accepting a candidate.
 |---:|---|
 | 0 | Success |
 | 1 | Unauthorized, invalid MAC/sequence, or invalid authentication attempt |
-| 2 | Device token unconfigured/invalid |
-| 3 | Shared admission busy (HTTP, button, timer/network event or another upload) |
+| 2 | No v2 binding (historical v1: token unconfigured/invalid) |
+| 3 | Shared admission busy (button, timer/network event or another upload) |
 | 4 | Invalid request, size, ID or unsupported opcode |
 | 5 | Unexpected offset, gap or conflicting duplicate |
 | 6 | Full-transfer SHA-256 mismatch |
@@ -174,15 +192,17 @@ manifest/imports, ABI and package identity before accepting a candidate.
 | 13 | Physical display failure |
 | 14 | Image request belongs to another device boot |
 
-Package Begin acquires the same admission semaphore as HTTP and the function key before
+Package Begin acquires the same admission semaphore as the function key and application work before
 allocating up to 1 MiB in PSRAM. It holds admission through commit/abort/timeout/
-disconnect. Commit calls **`app_manager_stage()`**, the identical path used by
-HTTP, and releases input only after it returns. Explicit activate/switch/rollback/
+disconnect. Commit enters the authorized manager stage path and releases input
+only after it returns. Explicit activate/switch/rollback/
 remove use the same manager worker and catalog transitions. No BLE callback
 loads ELF, writes a slot, invokes app code or touches the display. Long work never
 blocks the NimBLE task. Connection generations prevent old completions being
-published to a newly connected peer. The existing HTTP 401/409 and physical
-refresh 200 meanings do not change. Successful staging never activates an app.
+published to a newly connected peer. Reset also closes admission and drains the
+old transport before clearing the owner; queued work rechecks its authorization
+epoch before side effects. v2 HTTP control returns 410. Successful staging never
+activates an app.
 
 ## Memory and build
 
@@ -190,9 +210,10 @@ refresh 200 meanings do not change. Successful staging never activates an app.
 12 blocks in each mbuf pool, external PSRAM host allocation, and Wi-Fi/BLE software
 coexistence. Controller/DMA/task stacks retain the internal memory required by
 ESP-IDF. PSRAM allocation failure is reported; it does not fall back to using a
-megabytes of internal RAM. Package, BLE PNG and HTTP PNG receive buffers cannot coexist
-because they share admission. Link-layer security is deliberately disabled in
-favor of the authenticated protocol above, not an unauthenticated fallback.
+megabytes of internal RAM. Package and BLE PNG receive buffers cannot coexist
+because they share admission. Pairing v2 is application-layer authentication,
+not operating-system SMP bonding or link encryption; images remain observable
+on the radio. There is no fixed-token or unauthenticated control fallback.
 
 Use the pinned IDF commit `5e6f53cdb31fe5708eae3f55af9737be2822db22` and
 Registry elf_loader **1.3.3**. Existing ignored `sdkconfig` files do not receive

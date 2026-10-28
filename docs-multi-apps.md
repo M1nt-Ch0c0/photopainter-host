@@ -1,5 +1,7 @@
 # 多 Wi-Fi 与多应用管理
 
+当前配对 v2 **尚未实机验证**；HTTP token 控制已退役，已配对 BLE 管理及下述存储/文件规则为当前入口。
+
 本页记录宿主的五 bank 应用目录、A/B 管理和 SD/NVS 网络配置。框架开发入口见 [开发者 Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Home.md)。这里维护框架规则；相框收图业务与电脑渲染/发送流程在各自仓库。
 
 ## Wi-Fi 配置
@@ -35,17 +37,7 @@ python3 tools/wifi_profiles.py status --file /Volumes/SD/config/wifi.json
 
 管理工具采用相同的 `.tmp`/`.bak` 发布规则；已有主文件损坏时拒绝修改，不能通过备份掩盖。status 同时返回 `main`、`backup` 或 `missing` 来源，区分明确空列表与文件不存在。序号从 1 开始。移除最后一个网络会保存明确的空列表。编辑卡前关机取卡并备份，完成后插回设备重启。
 
-在线设备可使用同一端口 80、同一 Bearer 令牌的 `GET/POST /api/wifi` 管理卡上配置。GET 只读取 SD JSON（主文件缺失时可读 `.bak`），不会从 NVS 迁移；响应包含密码，CLI 只将它写入新建的 0600 私有备份文件，不打印正文，也不覆盖已有备份。POST 接受至多 8192 字节 `application/json`，校验后通过相同 `.tmp`/`.bak` 流程保存，下次重启生效。它不改 NVS、不触发重启、不刷新屏幕。无效请求在 SD 写入前拒绝；原文件损坏则拒绝覆盖。接口与推图/应用管理共用操作锁。
-
-```bash
-# 先备份，再在另一份私有副本上编辑；不要将备份放进源码仓库。
-python3 tools/wifi_device.py backup --url http://DEVICE_IP --file /private/path/original-wifi.json
-# 用 wifi_profiles.py 修改私有副本，再上传。
-python3 tools/wifi_device.py update --url http://DEVICE_IP --file /private/path/edited-wifi.json
-# 手动重启后生效；需要恢复时上传 original-wifi.json 并重启。
-```
-
-GET 缺卡/缺配置返回 404、坏 JSON 返回 409、其他 SD 错误返回 503。POST 超限返回 413、错误类型 415、无效 JSON 422、坏已有文件 409，其他存储错误 503；未配置令牌 503、鉴权失败 401。POST 200 仅表示 SD 保存完成。配置成空列表或全部不可达后，HTTP 无法帮助恢复，应使用 SD 文件或串口恢复入口。工具禁用代理和重定向，不自动重试更新。
+v2 的 `GET/POST /api/wifi` 均返回 410，不读取密码、不写入 SD。旧 `wifi_device.py` HTTP 工具仅供明确的 v1 历史维护。当前 Wi-Fi 变更使用上述本地 SD JSON 工具，或者在完整备份后通过 USB 重建网络 NVS；不会因网络不可达自动清除凭据。
 
 无卡部署可将同格式的私有文件写入 NVS：
 
@@ -57,7 +49,7 @@ python3 tools/provision.py --config secrets.env --wifi-json /private/path/wifi.j
   --port /dev/cu.YOUR_DEVICE
 ```
 
-`PUSH_TOKEN` 仍只从 `secrets.env` 提取，不从 SD 导入。本工具重建网络 NVS 分区；应用目录使用另一分区，不受影响。真实 JSON、密码和 NVS 镜像不要入库。
+`provision.py` 默认只生成 Wi-Fi NVS，不要求或写入 `PUSH_TOKEN`，已有文件中的旧值也不会成为 v2 凭据。只有明确的 v1 回滚才使用 `--legacy-token`。整块 NVS 重建会清除当前配对关系，需要重新物理配对；应用目录位于另一分区。日常修改 Wi-Fi 优先编辑 SD 文件，以保留配对。真实 JSON、密码和 NVS 镜像不要入库。
 
 ## 应用目录与存储分配
 
@@ -65,7 +57,7 @@ python3 tools/provision.py --config secrets.env --wifi-json /private/path/wifi.j
 
 | 分区 | 起始地址 | 大小 | 用途 |
 |---|---:|---:|---|
-| `nvs` | `0x9000` | `0x6000` | Wi-Fi 与入站令牌 |
+| `nvs` | `0x9000` | `0x6000` | Wi-Fi、配对 owner/tombstone；旧 token 不再使用 |
 | `factory` | `0x10000` | `0x500000` | 独立宿主固件 |
 | `elf_a` / `elf_b` | `0x510000` / `0x610000` | 各 `0x100000` | bank 0，原 photoframe A/B |
 | `elf_state` | `0x710000` | `0x6000` | 原子应用目录与状态日志 |
@@ -101,31 +93,31 @@ flowchart TB
 - **rollback**：取消候选，或交换指定应用的 active/previous。可回退未运行应用而不切换当前应用。首次安装尚未确认时没有该应用自己的 fallback，恢复的是原应用。
 - **remove**：只允许移除非当前且无全局试运行时的应用。先从目录移除，释放 bank；旧字节在后续分配时擦除，不会自动加载。不是安全擦除操作。
 
-未确认的全局试运行期间，拒绝其他安装、切换或删除，必须先完成该 ABI 的启动确认或回退。PNG 校验拒绝不确认、不切换；驱动失败或缺失结果回调触发恢复。候选确认日志写入失败时保留 trial，下一次重启仍回退；推图 200 只证明物理刷新成功，确认状态应读取管理接口。
+未确认的全局试运行期间，拒绝其他安装、切换或删除，必须先完成该 ABI 的启动确认或回退。PNG 校验拒绝不确认、不切换；驱动失败或缺失结果回调触发恢复。候选确认日志写入失败时保留 trial，下一次重启仍回退；业务图片的签名 complete/OK 回执证明物理刷新成功，应用确认状态另读已鉴权状态。
 
 所有应用仍是受信任的原生 ELF，共享内存与硬件；不是进程或沙箱。ABI 2 禁止自建任务/回调，STOP 后卸载；ABI 1 仍须在调用返回前释放资源。多个应用的代码可各自构建，但必须声明宿主支持的 ABI；不支持在后台同时常驻多个应用。
 
 ## 包与管理命令
 
-format 2 保留原 52 字节头，在偏移 52 添加 32 字节 NUL 填充 APP ID，填充至 4096 字节后跟 ELF。支持 ABI 1/2，ABI 2 还校验 manifest 和导入；ID 必须与请求一致。format 1 仅保留旧 photoframe ABI 1。SHA-256 用于完整性，上传鉴权由设备 Bearer 或 BLE HMAC 提供，不是包作者签名。
+format 2 保留原 52 字节头，在偏移 52 添加 32 字节 NUL 填充 APP ID，填充至 4096 字节后跟 ELF。支持 ABI 1/2，ABI 2 还校验 manifest 和导入；ID 必须与请求一致。format 1 仅保留旧 photoframe ABI 1。SHA-256 用于完整性，v2 上传鉴权由已配对关系派生的 BLE HMAC 会话提供，不是包作者签名。
 
 以下以无显示的 ABI 2 lifecycle 为例，不要求推一张图片确认：
 
 ```sh
 # 先在 photoframe/examples/lifecycle 构建；在宿主仓库打包
 python3 tools/module.py package --app lifecycle --version 1 --input ../photoframe/examples/lifecycle/build-app/lifecycle.app.elf --output /tmp/lifecycle-v1.pkg
-python3 tools/module.py stage --app lifecycle --url http://DEVICE_IP --input /tmp/lifecycle-v1.pkg
-python3 tools/module.py activate --app lifecycle --url http://DEVICE_IP
-python3 tools/module.py status --url http://DEVICE_IP
+ai-quota-frame ble install --file /tmp/lifecycle-v1.pkg
+ai-quota-frame ble activate --app lifecycle
+ai-quota-frame ble status
 ```
 
-也可以通过常驻 BLE 的 `ble install` / `ble activate`，无需 Wi-Fi。完整更新、回退及删除前提见 [安装指南](docs-module-slots.md)。删除必须先离开该 APP，回退必须有候选或 previous；不要把整段示例当作可无条件顺序执行的脚本。
+以上命令使用预先完成物理配对的 BLE 关系，无需 Wi-Fi 或固定推图令牌。完整更新、回退及删除前提见 [安装指南](docs-module-slots.md)。删除必须先离开该 APP，回退必须有候选或 previous；不要把整段示例当作可无条件顺序执行的脚本。
 
-HTTP 管理保持 `/api/module`、端口 80、原 Bearer。上传用 `POST /api/module?app=lifecycle`，操作加 `&op=activate|switch|rollback|remove`，GET 列出全部 APP。省略 APP 的旧管理操作默认为 photoframe，新增 APP 应显式带 ID。
+v2 的 `/api/module` GET/POST 均返回 410。应用管理通过 BLE 进行；本地 `module.py package` 仍用于生成包，HTTP 子命令只属于历史 v1。
 
 `selected/trial_app/loaded_app` 是 bank 索引，`apps[].id` 给出名称；`versions` 按 A/B 显示通过包头、ID、payload SHA 和 ELF 校验的版本，无效为 null。版本存在不等于已运行确认，要结合 active/previous/pending 和 runtime_ready。当前应用 ABI 看 payload_abi，不看旧顶层管理封套 abi。
 
-旧 HTTP PNG 输入目标与错误语义仅作兼容，见 [旧输入参考](docs/legacy-image-input.md)；新相框 APP 收图路线见 [Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/BLE-Image-App-Roadmap.md)。
+旧 HTTP PNG 输入目标与错误语义只作历史参考，见 [旧输入参考](docs/legacy-image-input.md)；新相框 APP 收图路线见 [Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/BLE-Image-App-Roadmap.md)。
 
 ## 历史布局迁移与当前维护边界
 

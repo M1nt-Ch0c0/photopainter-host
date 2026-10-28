@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Generate and flash only the PhotoPainter NVS configuration partition."""
+"""Generate Wi-Fi NVS for pairing v2; fixed tokens require explicit legacy mode.
+
+Writing a complete NVS image replaces its pairing namespace too. The generate-
+only path does not contact hardware; flashing remains a separately authorized
+physical maintenance operation.
+"""
 
 from __future__ import annotations
 
@@ -89,7 +94,8 @@ def profiles_blob(profiles: list[tuple[str, str]]) -> bytes:
 
 
 def validated(
-    values: dict[str, str], *, allow_empty_push_token: bool = False
+    values: dict[str, str], *, legacy_token: bool = False,
+    allow_empty_push_token: bool = False,
 ) -> tuple[str, str, str]:
     ssid = values.get("WIFI_SSID", "")
     password = values.get("WIFI_PASSWORD", "")
@@ -97,6 +103,10 @@ def validated(
     if not 1 <= len(ssid.encode()) <= 32:
         raise ValueError("WIFI_SSID must be 1..32 UTF-8 bytes")
     validate_network(ssid, password)
+    if not legacy_token:
+        # A retained v1 setting must not become a v2 credential or block Wi-Fi
+        # setup. The negotiated owner is established only by physical pairing.
+        return ssid, password, ""
     try:
         token_bytes = token.encode("ascii")
     except UnicodeEncodeError as error:
@@ -172,7 +182,8 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=Path("secrets.env"))
     parser.add_argument("--baud", default="460800")
     parser.add_argument("--generate-only", type=Path)
-    parser.add_argument("--allow-empty-push-token", action="store_true")
+    parser.add_argument("--legacy-token", action="store_true", help="include PUSH_TOKEN only for explicit v1 provisioning/rollback")
+    parser.add_argument("--allow-empty-push-token", action="store_true", help="legacy-only test compatibility; v2 does not use PUSH_TOKEN")
     args = parser.parse_args()
     if args.generate_only is None and not args.port:
         parser.error("--port is required unless --generate-only is used")
@@ -183,9 +194,10 @@ def main() -> int:
         values["WIFI_SSID"], values["WIFI_PASSWORD"] = profiles[0] if profiles else ("unconfigured", "")
     ssid, password, token = validated(
         values,
+        legacy_token=args.legacy_token,
         allow_empty_push_token=args.allow_empty_push_token,
     )
-    if profiles is not None and any(password == token for _, password in profiles):
+    if args.legacy_token and token and profiles is not None and any(password == token for _, password in profiles):
         raise ValueError("PUSH_TOKEN must be independent from all Wi-Fi passwords")
     idf_path_value = os.environ.get("IDF_PATH", "")
     if not idf_path_value:
@@ -214,7 +226,8 @@ def main() -> int:
                 writer.writerow(("wifi_pass", "data", "string", password))
             else:
                 writer.writerow(("wifi_profiles", "data", "hex2bin", profiles_blob(profiles).hex()))
-            writer.writerow(("push_token", "data", "string", token))
+            if args.legacy_token:
+                writer.writerow(("push_token", "data", "string", token))
 
         subprocess.run(
             [sys.executable, str(generator), "generate", str(csv_path),
@@ -232,7 +245,7 @@ def main() -> int:
              hex(NVS_OFFSET), str(binary_path)],
             check=True,
         )
-    print("NVS provisioned; secret values were not printed")
+    print("NVS provisioned; Wi-Fi and pairing state were replaced; secret values were not printed")
     return 0
 
 

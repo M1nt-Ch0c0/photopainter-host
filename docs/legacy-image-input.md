@@ -1,6 +1,6 @@
 # 历史兼容输入：HTTP PNG 与宿主 BLE PNG
 
-适用基线：宿主 `b4709c0`。这些接口保留兼容与回归测试；**新路线由 photoframe APP 通过 ABI 2.1 服务实现图片业务，暂停扩展专用 PNG 宿主协议**。应用操作命令见 [相框](https://github.com/M1nt-Ch0c0/photoframe/blob/main/README.md)及[电脑端](https://github.com/M1nt-Ch0c0/ai-quota-frame/blob/main/docs/ble.md)，不在框架 README 维护推图教程。
+本页 HTTP 合同仅适用于历史宿主 `b4709c0` 等 v1 固件。**当前配对 v2 已把 HTTP 控制统一退役为 410，旧 token 不能继续控制设备。** 宿主 BLE PNG opcode 仍可在 BondAuth 后作兼容使用；新路线由 photoframe APP 通过受管 GATT/CoC 实现图片业务。应用操作命令见 [相框](https://github.com/M1nt-Ch0c0/photoframe/blob/main/README.md)及[电脑端](https://github.com/M1nt-Ch0c0/ai-quota-frame/blob/main/docs/ble.md)。
 
 ## 既有 HTTP 合同
 
@@ -25,4 +25,4 @@ opcode 15/16/17 是 capability、PNG begin 和结果查询，复用 CHUNK/COMMIT
 
 ## 回归约束
 
-保留原 HTTP 401/409、ABI 1/2 PNG 输入兼容、A/B 确认与启动保护、完整验色和物理成功语义。不能以整理文档为由删除代码或弱化测试。物理完成还需人工目测方向、颜色和内容。
+v1 记录中的 HTTP 401/409/200 不变成 v2 当前行为。v2 回归应验证旧入口带/不带 token 均为 410、无副作用；ABI 1/2 PNG 输入兼容、A/B 确认、启动保护、完整验色和物理成功语义仍保留。物理配对 v2 尚未实机验证，实际完成还需签名回执和人工目测。

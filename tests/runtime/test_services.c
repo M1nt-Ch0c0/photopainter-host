@@ -5,7 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 static int64_t now;static uint64_t deadline;static int displays,restarts,result;
+static bool physical_display;
+bool app_manager_display_begin(void){if(physical_display)return false;physical_display=true;return true;}
+void app_manager_display_end(void){physical_display=false;}
 void photopainter_ble_app_changed(void){}
+void photopainter_coc_wakeup(void){}
 static void (*watchdog)(void *);
 int64_t esp_timer_get_time(void){return now;}
 esp_err_t esp_timer_create(const esp_timer_create_args_t *a,esp_timer_handle_t *t){watchdog=a->callback;*t=(void *)1;return 0;}
@@ -13,7 +17,7 @@ esp_err_t esp_timer_stop(esp_timer_handle_t t){(void)t;deadline=0;return 0;}
 esp_err_t esp_timer_start_once(esp_timer_handle_t t,uint64_t us){(void)t;deadline=us;return 0;}
 void esp_restart(void){restarts++;}
 int photoframe_e6_render(const uint8_t *wire,size_t n) {
-    assert(deadline==650000000);assert(n==192000);displays++;
+    assert(deadline==650000000&&physical_display);assert(n==192000);displays++;
     assert(wire[n-1]==0x53&&wire[0]==0x62);return result;
 }
 static app_context_v2_t c;

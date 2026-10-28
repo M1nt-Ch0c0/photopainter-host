@@ -45,10 +45,16 @@ class WiFiDeviceTests(unittest.TestCase):
             def log_message(self, *args): pass
             def do_GET(self):
                 seen.append((self.command, self.path, self.headers.get('Authorization')))
+                # Consume the POST fixture before closing the socket; leaving
+                # it unread can produce a platform TCP RST instead of a reply.
+                if self.command == 'POST':
+                    assert self.rfile.read(int(self.headers.get('Content-Length', '0'))) == BODY
+                response = b'x'*8193 if self.mode == 'large' else BODY
                 self.send_response(302 if self.mode == 'redirect' else 200)
                 if self.mode == 'redirect': self.send_header('Location', '/secret-leak')
+                self.send_header('Content-Length', str(len(response)))
                 self.end_headers()
-                self.wfile.write(b'x'*8193 if self.mode == 'large' else BODY)
+                self.wfile.write(response)
             do_POST = do_GET
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()

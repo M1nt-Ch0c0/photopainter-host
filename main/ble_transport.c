@@ -6,6 +6,7 @@
 #include "app_runtime.h"
 #include "app_ble.h"
 #include "ble_coc.h"
+#include "app_pairing.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -23,6 +24,7 @@
 #include "psa/crypto.h"
 #include <string.h>
 #include <stdatomic.h>
+#include <stdio.h>
 
 /* UUID in conventional notation: 7b9d0001-6c82-4f31-9a48-6f5061696e74.
  * Characteristics replace 0001 with 0002(info), 0003(challenge), 0004(RX), 0005(TX). */
@@ -44,7 +46,10 @@ static uint32_t fragment_target,request_target;
 static pp_ble_fragments fragments;
 static pp_ble_session *session;
 static pp_ble_images image_receipts;
-static char device_token[129];
+static char advertised_name[8];
+static uint32_t authorized_binding_epoch;
+static uint32_t request_binding_epoch;
+static atomic_uint reset_acknowledged;
 static struct ble_npl_event advertise_event;
 static struct ble_npl_event app_event;
 static struct ble_npl_event terminate_event;
@@ -61,7 +66,8 @@ static int access_gatt(uint16_t,uint16_t,struct ble_gatt_access_ctxt *,void *);
 static void take(void) {xSemaphoreTake(lock,portMAX_DELAY);}
 static void give(void) {xSemaphoreGive(lock);}
 bool photopainter_ble_coc_key(uint16_t conn,uint8_t key[32]) {
-    take();bool ok=authenticated && connection==conn;
+    uint32_t binding_epoch=app_pairing_authorization_epoch();
+    take();bool ok=!app_manager_pairing_reset_pending() && authenticated && connection==conn && authorized_binding_epoch==binding_epoch;
     if(ok)memcpy(key,coc_auth_key,32);
     give();return ok;
 }
@@ -92,6 +98,19 @@ static void schedule_termination(uint32_t expected_epoch,uint16_t conn) {
         ble_npl_eventq_put(nimble_port_get_dflt_eventq(),&terminate_event);
     }
     give();
+}
+void photopainter_ble_revoke(void) {
+    if(!atomic_load(&started))return;
+    take();uint32_t current=epoch;uint16_t conn=connection;
+    authenticated=false;authorized_binding_epoch=0;memset(coc_auth_key,0,32);
+    app_ble_connection(false);pending=false;processing=false;response_size=0;
+    memset(&fragments,0,sizeof(fragments));challenge_epoch=0;
+    give();
+    photopainter_coc_wakeup();
+    if(conn!=BLE_HS_CONN_HANDLE_NONE)schedule_termination(current,conn);
+}
+bool photopainter_ble_reset_ready(uint32_t serial){
+    return serial && (!atomic_load(&started)||atomic_load(&reset_acknowledged)==serial);
 }
 
 void photopainter_ble_app_changed(void) {
@@ -165,8 +184,8 @@ static void advertise(struct ble_npl_event *unused) {
     struct ble_hs_adv_fields adv={0},scan={0};
     adv.flags=BLE_HS_ADV_F_DISC_GEN|BLE_HS_ADV_F_BREDR_UNSUP;
     adv.uuids128=(ble_uuid128_t *)&service_uuid;adv.num_uuids128=1;adv.uuids128_is_complete=1;
+    adv.name=(uint8_t *)advertised_name;adv.name_len=strlen(advertised_name);adv.name_is_complete=1;
     scan.mfg_data=data;scan.mfg_data_len=sizeof(data);
-    scan.name=(uint8_t *)"PPBLE";scan.name_len=5;scan.name_is_complete=1;
     int rc=ble_gap_adv_set_fields(&adv);
     if(!rc) rc=ble_gap_adv_rsp_set_fields(&scan);
     struct ble_gap_adv_params params={0};
@@ -195,7 +214,7 @@ static int access_gatt(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *
     if(conn!=connection) {give();return BLE_ATT_ERR_UNLIKELY;}
     uint32_t target=0;
     if(which>=256) {
-        if(!authenticated){give();return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;}
+        if(!authenticated||app_manager_pairing_reset_pending()){give();return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;}
         target=(uint32_t)(which-256)+1;
         if(ctx->op==BLE_GATT_ACCESS_OP_READ_CHR) {
             uint8_t value[128];size_t size;
@@ -212,11 +231,11 @@ static int access_gatt(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *
     } else if(which==5) {
         /* A one-byte zero is a transport pending marker, never a successful
          * authenticated response. Avoid platform-specific ATT error caching. */
-        if(processing || !response_size) {uint8_t waiting=0;result=os_mbuf_append(ctx->om,&waiting,1)?BLE_ATT_ERR_INSUFFICIENT_RES:0;}
+        if(app_manager_pairing_reset_pending() || processing || !response_size) {uint8_t waiting=0;result=os_mbuf_append(ctx->om,&waiting,1)?BLE_ATT_ERR_INSUFFICIENT_RES:0;}
         else result=os_mbuf_append(ctx->om,response,response_size)?BLE_ATT_ERR_INSUFFICIENT_RES:0;
     } else if(which==4) {
         uint8_t bytes[512];uint16_t size=OS_MBUF_PKTLEN(ctx->om);
-        if(processing) result=BLE_ATT_ERR_INSUFFICIENT_RES;
+        if(app_manager_pairing_reset_pending()||processing) result=BLE_ATT_ERR_INSUFFICIENT_RES;
         else if(size>sizeof(bytes) || os_mbuf_copydata(ctx->om,0,size,bytes)) result=BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         else {
             if(!fragments.received)fragment_target=target;
@@ -242,7 +261,7 @@ static int gap_event(struct ble_gap_event *event,void *arg) {
     (void)arg;
     if(event->type==BLE_GAP_EVENT_CONNECT || event->type==BLE_GAP_EVENT_DISCONNECT) {
         take();epoch++;challenge_epoch=0;pending=processing=false;response_size=0;
-        authenticated=false;app_ble_connection(false);
+        authenticated=false;authorized_binding_epoch=0;memset(coc_auth_key,0,32);app_ble_connection(false);
         subscribed=0;
         memset(&fragments,0,sizeof(fragments));memset(challenge,0,sizeof(challenge));
         connection=event->type==BLE_GAP_EVENT_CONNECT && !event->connect.status?
@@ -270,27 +289,30 @@ static int map_error(esp_err_t err,bool stage) {
     return PP_BLE_STORAGE;
 }
 static void *allocate_package(size_t size) {return heap_caps_malloc(size,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);}
-static int stage(const char *id,const uint8_t *data,size_t size) {return map_error(app_manager_stage(id,data,size),true);}
+static bool acquire_authorized(void){
+    if(!request_binding_epoch||!app_manager_acquire())return false;
+    if(app_manager_pairing_reset_pending()||request_binding_epoch!=app_pairing_authorization_epoch()){app_manager_release();return false;}
+    return true;
+}
+static int stage(const char *id,const uint8_t *data,size_t size) {return map_error(app_manager_stage_authorized(id,data,size,request_binding_epoch),true);}
 static int manage(uint8_t op,const char *id) {
     esp_err_t err=ESP_ERR_INVALID_ARG;
-    if(op==PP_BLE_ACTIVATE || op==PP_BLE_SWITCH) err=app_manager_select_from(id,op==PP_BLE_ACTIVATE,"ble");
-    else if(op==PP_BLE_ROLLBACK) err=app_manager_rollback_from(id,"ble");
-    else if(op==PP_BLE_REMOVE) err=app_manager_remove(id);
+    if(op==PP_BLE_ACTIVATE || op==PP_BLE_SWITCH) err=app_manager_select_authorized(id,op==PP_BLE_ACTIVATE,"ble",request_binding_epoch);
+    else if(op==PP_BLE_ROLLBACK) err=app_manager_rollback_authorized(id,"ble",request_binding_epoch);
+    else if(op==PP_BLE_REMOVE) err=app_manager_remove_authorized(id,request_binding_epoch);
     return map_error(err,false);
 }
 static int app_operation(uint8_t op,const uint8_t *p,size_t n,uint8_t *out,size_t *size) {
     uint32_t index=pp_ble_u32(p+8);
     if(request_target && (op!=PP_BLE_APP_WRITE || index!=request_target-1))return PP_BLE_INVALID;
-    int result=app_ble_request(op==PP_BLE_APP_WRITE,pp_ble_u32(p),pp_ble_u32(p+4),index,p+12,n-12,out,size);
-    if(result==PP_BLE_OK && op==PP_BLE_APP_WRITE)result=map_error(app_manager_ble_flush(pp_ble_u32(p)),false);
-    return result;
+    return app_manager_ble_request_authorized(op==PP_BLE_APP_WRITE,p,n,out,size,request_binding_epoch);
 }
 static int image_ready(const char *id) {
     return photoframe_plugin_is_ready() && app_manager_target_is_running(id) &&
         app_runtime_accepts_png()?PP_BLE_OK:PP_BLE_STATE;
 }
 static int render_image(const uint8_t *data,size_t size) {
-    switch(app_manager_render(data,size)) {
+    switch(app_manager_render_authorized(data,size,request_binding_epoch)) {
     case PHOTOFRAME_RESULT_OK:return PP_BLE_OK;
     case PHOTOFRAME_RESULT_ARGUMENT:case PHOTOFRAME_RESULT_PNG:
     case PHOTOFRAME_RESULT_DIMENSIONS:case PHOTOFRAME_RESULT_COLOR:return PP_BLE_IMAGE_INVALID;
@@ -300,20 +322,31 @@ static int render_image(const uint8_t *data,size_t size) {
     }
 }
 static const pp_ble_ops operations={
-    .acquire=app_manager_acquire,.release=app_manager_release,.alloc=allocate_package,
+    .acquire=acquire_authorized,.release=app_manager_release,.alloc=allocate_package,
     .free=heap_caps_free,.stage=stage,.manage=manage,.status=app_manager_status,
     .app=app_operation,.images=&image_receipts,.image_ready=image_ready,.render=render_image,
 };
 static void transport_worker(void *arg) {
-    (void)arg;uint32_t local_epoch=0;
+    (void)arg;uint32_t local_epoch=0,session_binding_epoch=0,connection_binding_epoch=0;
     for(;;) {
+        uint32_t resetting=app_manager_pairing_reset_pending();
+        if(resetting){
+            /* Only this owner thread can free/release a session. Reaching here
+             * proves the previous local request and any borrowed manager job
+             * have returned. ACK is published last, after upload admission. */
+            pp_ble_close(session);session_binding_epoch=connection_binding_epoch=request_binding_epoch=0;
+            take();pending=processing=false;response_size=0;memset(&fragments,0,sizeof(fragments));
+            authenticated=false;authorized_binding_epoch=0;memset(coc_auth_key,0,32);challenge_epoch=0;give();
+            atomic_store(&reset_acknowledged,resetting);
+            vTaskDelay(pdMS_TO_TICKS(20));continue;
+        }
         uint8_t request[512],out[512],current_info[20];size_t size=0;
         take();uint32_t current_epoch=epoch;uint16_t conn=connection;
         memcpy(current_info,info,20);
         if(pending) {size=fragments.total;request_target=fragment_target;memcpy(request,fragments.data,size);pending=false;fragments.received=fragments.total=0;}
         give();
         if(local_epoch!=current_epoch) {
-            pp_ble_close(session);local_epoch=current_epoch;
+            pp_ble_close(session);local_epoch=current_epoch;session_binding_epoch=0;connection_binding_epoch=app_pairing_authorization_epoch();
             if(conn!=BLE_HS_CONN_HANDLE_NONE) {
                 uint8_t nonce[32];esp_fill_random(nonce,sizeof(nonce));
                 pp_ble_open(session,&operations,current_info+2,nonce,now_ms());
@@ -321,18 +354,31 @@ static void transport_worker(void *arg) {
             }
         }
         if(size && conn!=BLE_HS_CONN_HANDLE_NONE) {
-            size_t n=pp_ble_request(session,device_token,current_info,request,size,now_ms(),out);
+            uint32_t binding_epoch=app_pairing_authorization_epoch();request_binding_epoch=binding_epoch;
+            if(app_manager_pairing_reset_pending() || connection_binding_epoch!=binding_epoch ||
+               (session->authenticated&&session_binding_epoch!=binding_epoch))pp_ble_close(session);
+            size_t n;
+            if(request[0]==PP_BLE_AUTH || (request[0]>=PP_PAIR_INFO&&request[0]<=PP_BOND_AUTH))
+                n=app_pairing_request(session,current_info,request,size,now_ms(),out);
+            else n=pp_ble_request(session,"",current_info,request,size,now_ms(),out);
+            if(app_manager_pairing_reset_pending()||binding_epoch!=app_pairing_authorization_epoch()){
+                pp_ble_close(session);out[0]=request[0];memset(out+1,0,6);out[5]=PP_BLE_EXPIRED;n=7;
+            }
+            if(session->authenticated)session_binding_epoch=binding_epoch;
             /* A valid manager job can take 650 seconds; idle timeout starts
              * after it finishes, never while borrowed input is still in use. */
             if(n>=39 && session->authenticated) session->touched=now_ms();
-            take();if(epoch==local_epoch) {
+            take();if(epoch==local_epoch&&!app_manager_pairing_reset_pending()) {
                 memcpy(response,out,n);response_size=n;processing=false;
                 if(authenticated!=session->authenticated) {
                     authenticated=session->authenticated;app_ble_connection(authenticated);
-                    if(authenticated)memcpy(coc_auth_key,session->key,32);
-                    else memset(coc_auth_key,0,32);
+                    if(authenticated){memcpy(coc_auth_key,session->key,32);authorized_binding_epoch=session_binding_epoch;}
+                    else {memset(coc_auth_key,0,32);authorized_binding_epoch=0;}
                 }
             }give();
+        }
+        if(session->authenticated&&session_binding_epoch!=app_pairing_authorization_epoch()){
+            pp_ble_close(session);schedule_termination(local_epoch,conn);
         }
         if(conn!=BLE_HS_CONN_HANDLE_NONE && photopainter_coc_active(conn))session->touched=now_ms();
         photopainter_coc_wakeup();
@@ -357,9 +403,8 @@ static void on_reset(int reason) {
     ESP_LOGW("ble","host reset: %d",reason);
 }
 static void host_worker(void *arg) {(void)arg;nimble_port_run();nimble_port_freertos_deinit();}
-esp_err_t photopainter_ble_start(const char *token) {
+esp_err_t photopainter_ble_start(void) {
     if(started) return ESP_ERR_INVALID_STATE;
-    if(!token || strnlen(token,129)>128) return ESP_ERR_INVALID_ARG;
     if(psa_crypto_init()!=PSA_SUCCESS) return ESP_FAIL;
     lock=xSemaphoreCreateMutex();
     session=heap_caps_calloc(1,sizeof(*session),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
@@ -367,17 +412,17 @@ esp_err_t photopainter_ble_start(const char *token) {
     info[0]=PP_BLE_VERSION;
     esp_err_t err=esp_read_mac(info+2,ESP_MAC_WIFI_STA);
     if(err!=ESP_OK) return err;
-    memcpy(device_token,token,strlen(token)+1);
+    snprintf(advertised_name,sizeof(advertised_name),"PP-%02X%02X",info[6],info[7]);
     uint8_t boot[16];esp_fill_random(boot,sizeof(boot));pp_ble_images_init(&image_receipts,boot);
     err=nimble_port_init();if(err!=ESP_OK) return err;
     if(photopainter_coc_init()!=0)return ESP_ERR_NO_MEM;
-    ble_svc_gap_init();ble_svc_gatt_init();ble_svc_gap_device_name_set("PhotoPainter");
+    ble_svc_gap_init();ble_svc_gatt_init();ble_svc_gap_device_name_set(advertised_name);
     ble_npl_event_init(&advertise_event,advertise,NULL);
     ble_npl_event_init(&app_event,app_changed,NULL);
     ble_npl_event_init(&terminate_event,terminate_expired,NULL);
     ble_hs_cfg.sync_cb=on_sync;ble_hs_cfg.reset_cb=on_reset;
     if(ble_gatts_count_cfg(services) || ble_gatts_add_svcs(services)) return ESP_FAIL;
-    if(xTaskCreate(transport_worker,"ble_transfer",6144,NULL,4,NULL)!=pdPASS) return ESP_ERR_NO_MEM;
+    if(xTaskCreate(transport_worker,"ble_transfer",12288,NULL,4,NULL)!=pdPASS) return ESP_ERR_NO_MEM;
     started=true;nimble_port_freertos_init(host_worker);
     return ESP_OK;
 }

@@ -2,6 +2,7 @@
 #include "app_services.h"
 #include "app_ble.h"
 #include "app_coc.h"
+#include "app_manager.h"
 #include "photopainter_board.h"
 #include "esp_timer.h"
 #include "esp_system.h"
@@ -46,17 +47,22 @@ esp_err_t app_services_begin(const app_context_v2_t *c) {
     esp_err_t e=arm(5000);if(e==ESP_OK)context=c;
     return e;
 }
-esp_err_t app_services_legacy_begin(void){return context?ESP_ERR_INVALID_STATE:arm(650000);}
-void app_services_end(void) {if(watchdog)esp_timer_stop(watchdog);context=NULL;borrowed=false;}
+esp_err_t app_services_legacy_begin(void){
+    if(context||!app_manager_display_begin())return ESP_ERR_INVALID_STATE;
+    esp_err_t result=arm(650000);if(result!=ESP_OK)app_manager_display_end();return result;
+}
+void app_services_end(void) {if(watchdog)esp_timer_stop(watchdog);context=NULL;borrowed=false;app_manager_display_end();}
 bool app_services_display_completed(void) {return displayed;}
 static bool active(void) {return context && current[0] && context->generation==generation;}
 int32_t app_host_display_v2(const uint8_t *pixels,uint32_t bytes) {
     if(!active()||context->event==APP_EVENT_STOP||display_called)return APP_ERR_RUNTIME;
     if(!pixels||bytes!=APP_FRAME_BYTES)return APP_ERR_ARGUMENT;
     for(uint32_t i=0;i<bytes;i++)if(pixels[i]>APP_GREEN)return APP_ERR_COLOR;
-    if(arm(650000)!=ESP_OK)return APP_ERR_RUNTIME;
+    if(!app_manager_display_begin())return APP_ERR_RUNTIME;
+    if(arm(650000)!=ESP_OK){app_manager_display_end();return APP_ERR_RUNTIME;}
     display_called=true;
     int r=photopainter_board_display(pixels,bytes);
+    app_manager_display_end();
     displayed=r==APP_OK;
     /* Failure to re-arm must not leave a live application without a watchdog. */
     if(arm(5000)!=ESP_OK)esp_restart();

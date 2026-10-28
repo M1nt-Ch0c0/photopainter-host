@@ -59,9 +59,8 @@ esp_err_t photopainter_host_config_load(photopainter_host_config_t *config)
         config->token_status=err;network_error=err;
     }
     if (err == ESP_OK) {
-        err = read_optional_string(handle, "push_token", config->push_token,
-                                   sizeof(config->push_token));
-        config->token_status = err;
+        /* The retired push_token is deliberately not read or accepted.
+         * Pairing owns its independent physical-confirmation NVS record. */
         network_error = read_networks(handle, &fallback);
         nvs_close(handle);
     }

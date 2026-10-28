@@ -49,7 +49,8 @@ def token_from_config(path):
     # Consume credentials locally; never print values or pass in process arguments.
     from provision import load_env, validated
 
-    return validated(load_env(path))[2]
+    # HTTP subcommands are retained only for explicit legacy v1 maintenance.
+    return validated(load_env(path), legacy_token=True)[2]
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

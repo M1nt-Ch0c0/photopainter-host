@@ -8,6 +8,7 @@
 #include "push_server.h"
 #include "wifi_station.h"
 #include "ble_transport.h"
+#include "app_pairing.h"
 
 static const char *TAG = "photopainter_host";
 
@@ -25,14 +26,15 @@ void app_main(void)
         ESP_LOGE(TAG, "NVS initialization failed: %s", esp_err_to_name(err));
     }
 
+    err=app_pairing_init();
+    if(err!=ESP_OK)ESP_LOGE(TAG,"pairing storage unavailable: %s",esp_err_to_name(err));
     /* Local applications boot independently of Wi-Fi and incoming HTTP. */
     err = app_manager_start();
     if (err != ESP_OK) ESP_LOGE(TAG,"application manager unavailable: %s",esp_err_to_name(err));
     photopainter_host_config_t config;
     err = photopainter_host_config_load(&config);
-    /* A damaged/offline Wi-Fi source must not disable independent BLE recovery.
-     * The token is loaded separately from NVS, even when SD JSON is rejected. */
-    esp_err_t ble_err=photopainter_ble_start(config.push_token);
+    /* Independent physical pairing remains available even without Wi-Fi. */
+    esp_err_t ble_err=photopainter_ble_start();
     if(ble_err!=ESP_OK) ESP_LOGE(TAG,"BLE unavailable: %s",esp_err_to_name(ble_err));
     if (err != ESP_OK) {
         photopainter_ble_network(3,0,NULL);
@@ -41,7 +43,7 @@ void app_main(void)
     }
     if (config.wifi.count) {
         err=photopainter_wifi_connect(&config.wifi);
-        if(err==ESP_OK)err=photopainter_push_server_start(config.push_token);
+        if(err==ESP_OK)err=photopainter_push_server_start();
         if(err!=ESP_OK)ESP_LOGE(TAG,"network service unavailable: %s",esp_err_to_name(err));
     } else ESP_LOGW(TAG,"no Wi-Fi profiles; local applications remain active");
     clear_config(&config);

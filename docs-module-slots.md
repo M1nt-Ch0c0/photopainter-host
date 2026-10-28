@@ -2,6 +2,8 @@
 
 本页是当前五 bank 框架的管理指南，覆盖 ABI 1/2.0/2.1/2.2。旧单应用 ABI 1 部署说明保留在 [历史提交](https://github.com/M1nt-Ch0c0/photopainter-host/blob/3b6f7e2/docs-module-slots.md)，不作为当前分区写入教程。
 
+当前源码使用物理配对 v2，**尚未实机验证**。包格式、APP ABI 和分区不变；管理使用已配对 BLE，旧 HTTP token 控制入口返回 410。
+
 ## 包与身份
 
 每 APP 固定占用一个 bank，A/B 各 1 MiB，最大五个 APP。包包括 4096 字节头和 ELF payload，总计不超过 1 MiB。format 1 仅保留旧 photoframe ABI 1；format 2 携带 32 字节 NUL 填充 APP ID，可用于 ABI 1/2。
@@ -40,11 +42,11 @@ python3 tools/module.py package --app lifecycle --version 1 \
 | rollback | 取消候选或恢复 previous |
 | remove | 删除非当前 APP 目录项，不是安全擦除 |
 
-HTTP 与 BLE 上传都调用 `app_manager_stage()`，管理操作都经过唯一 App Manager。校验通过后，先使备用旧 fallback 标记失效，再写 payload、读回校验，最后提交包头和 pending；活动槽保持可用。
+已配对 BLE 的上传/管理通过授权代次检查进入唯一 App Manager 和既有 stage 状态机。校验通过后，先使备用旧 fallback 标记失效，再写 payload、读回校验，最后提交包头和 pending；活动槽保持可用。
 
 ## 应用 OTA
 
-停止竞争的自动客户端，先核对真实目录和授权，再使用可信启动器加载设备令牌。BLE 不需要设备 IP：
+停止竞争的自动客户端，先通过 `ble pair` 和设备功能键建立关系，再核对真实目录和授权。后续命令使用保存的关系，不需要设备令牌或 IP：
 
 ```sh
 ai-quota-frame ble status
@@ -54,15 +56,7 @@ ai-quota-frame ble activate --app lifecycle
 ai-quota-frame ble status
 ```
 
-HTTP 管理保留端口 80 和 `/api/module`：
-
-```sh
-python3 tools/module.py status --url http://DEVICE_IP
-python3 tools/module.py stage --app lifecycle --url http://DEVICE_IP --input /tmp/lifecycle-v1.pkg
-python3 tools/module.py activate --app lifecycle --url http://DEVICE_IP
-```
-
-HTTP stage 成功为 202，管理操作按实际结果返回；忙/非法状态通常 409，坏包 422，超限 413。令牌未配置 503、缺失或错误 401。BLE 返回相应的协议错误码，见 [协议](docs/ble-protocol.md)。鉴权包不能通过代理/重定向泄漏至其他目标。
+v2 的 `/api/module` GET/POST 都返回 410，不暂存或激活。`tools/module.py package` 仍是当前本地打包工具；其 HTTP 子命令仅供明确的 v1 历史维护，不应对 v2 使用。BLE 管理错误和恢复规则见 [协议](docs/ble-protocol.md)。
 
 ## 确认与恢复
 

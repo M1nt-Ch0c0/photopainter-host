@@ -3,7 +3,7 @@
 
 The doctor never reads .env, secrets.env, NVS images, or token values. Its HTTP
 probe deliberately omits Authorization, so a configured device should answer
-401 without touching the display. Serial probing is opt-in because opening the
+401 (legacy) or 410 (paired v2) without touching the display. Serial probing is opt-in because opening the
 ESP32-S3 native USB serial port can reset the device.
 """
 
@@ -322,6 +322,8 @@ def check_http(report: Report, raw_url: str | None, timeout: float) -> None:
     status, detail = probe_http(url, timeout)
     if status == 401:
         report.add("device.http", "pass", "401 configured and reachable")
+    elif status == 410:
+        report.add("device.http", "pass", "410 reachable; legacy HTTP control retired, use paired BLE")
     elif status == 503:
         report.add("device.http", "warn", f"503 reachable but unconfigured: {detail}")
     elif status is None:

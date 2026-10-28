@@ -4,6 +4,8 @@ ABI 2.2 增加单前台所有权 CoC 和 `APP_EVENT_COC`，保留已有布局与
 
 本页描述已实现的框架运行接口；开发入门见 [Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Home.md)。固定 ESP-IDF `5e6f53cdb31fe5708eae3f55af9737be2822db22` 与 Registry elf_loader 1.3.3。不同日期的实机证据见 [参考目录](docs/README.md)，不能只凭旧验收记录判断当前设备版本。
 
+当前源码的配对 v2 **尚未实机验证**。它不改变 APP ABI，下面的应用生命周期与目录合同继续适用；鉴权改为持久配对，旧 HTTP 控制返回 410。
+
 兼容扩展 **ABI 2.1** 提供三个受管服务：注册应用 GATT、设置值和注销。`APP_MANIFEST` 保持 2.0，使用新服务时声明 `APP_MANIFEST_BLE`（2.1）。布局不变，旧 ABI 1/2.0 继续运行；不支持 2.1 的旧宿主会拒绝新包。发现、鉴权和应用 OTA 常驻宿主；photoframe APP 已实现图片接收协议，见 [应用协议](https://github.com/M1nt-Ch0c0/photoframe/blob/main/docs/ble-image-input.md)。现有宿主 PNG 路径只作兼容保留。协议和限制见 [BLE 参考](docs/ble-protocol.md)。
 
 ## 安装数量和切换
@@ -12,17 +14,19 @@ ABI 2.2 增加单前台所有权 CoC 和 `APP_EVENT_COC`，保留已有布局与
 
 GPIO 4 功能键为低有效、上拉输入。短按并松开会按 bank 顺序循环切到下一个有 active 版本的 ABI 2 应用，并等待目标自己的 START 首屏。只有一个候选时不刷新。该键不会激活 pending 更新，也不会修改 Wi-Fi。BOOT（GPIO 0）和电源键（GPIO 5）不参与切换。
 
+配对 v2 增加宿主系统层的按键优先级：六位配对码已完成显示且正在等待确认时，短按只确认当前请求；其他未绑定阶段不切换 APP。功能键长按至少 8 秒并松开会锁存重置请求，包括正在刷屏时：立即撤销传输并禁止后续工作，已经开始的实体刷新完成 POWER_OFF 后才持久清除配对关系。远端上传或连续推图不能阻止此操作；启动时一直按住仍不视为重置手势。配对页与 APP 显示共用唯一 Manager，等待物理确认时暂缓 APP 事件，之后恢复。协议和生命周期见 [物理配对](docs/ble-pairing-v2.md)。
+
 - 消抖 30 ms；稳定按下 50–小于 600 ms，稳定释放后触发一次。
-- 启动时按住、长按、连续抖动不会连发。
-- 收图、刷屏、写包、Wi-Fi 配置操作或已有切换期间的手势被忽略，不排队补刷；请等待刷新完成再按。
+- 启动时按住、连续抖动不会连发；8 秒长按是独立的物理撤权请求。
+- 收图、刷屏、写包或已有切换期间的普通短按被忽略，不排队补刷。长按不受这些 busy 状态阻断，按上述时序等待当前物理刷新结束后重置。
 - ABI 1 只能由 CLI 选择，因为它没有自主首屏，切入后仍要推 PNG。
 
-CLI 使用原端口和令牌，切换不需要另外推一张触发图：
+CLI 使用已保存的配对关系，切换不需要另外推一张触发图：
 
 ```bash
-python3 tools/module.py status --url http://DEVICE_IP
-python3 tools/module.py switch --app color-test --url http://DEVICE_IP
-python3 tools/module.py switch --app photoframe --url http://DEVICE_IP
+ai-quota-frame ble status
+ai-quota-frame ble switch --app color-test
+ai-quota-frame ble switch --app photoframe
 ```
 
 示例应用的首屏由应用决定：相框恢复 RAM 帧或显示等待页；色带自行生成六色帧。框架不替 APP 生成业务首屏。客户端不能借发送业务数据抢回当前应用选择；兼容 HTTP 的错误语义见 [旧输入参考](docs/legacy-image-input.md)。
@@ -31,8 +35,7 @@ python3 tools/module.py switch --app photoframe --url http://DEVICE_IP
 
 ```mermaid
 flowchart LR
-    HTTP[HTTP 鉴权与收包] --> Manager[唯一 App Manager]
-    BLE[常驻 BLE：发现、鉴权、收包及应用事件] --> Manager
+    BLE[常驻 BLE：发现、物理配对、鉴权与应用事件] --> Manager[唯一 App Manager]
     Key[GPIO 4 短按] --> Manager
     Events[定时及网络状态] --> Manager
     Manager --> Catalog[5 bank 目录与独立 A/B]
@@ -42,7 +45,7 @@ flowchart LR
     Services --> Board[宿主板级组件 / E6]
 ```
 
-所有应用调用、目录变更及 SD 配置操作在同一管理任务执行。HTTP 接纳锁覆盖收包到响应，一个大请求体同时在途；队列上限 8 个描述符。作业借用的输入一直保留到调用完成，客户端断开不会取消已经开始的刷新。运行代次随加载变化；定时器切出自动取消，网络通知合并，只交付连接状态。状态快照由宿主管理；HTTP 服务本身串行处理请求，长事务期间后来的状态请求可能等待。
+所有应用调用、目录变更和显示操作在同一管理任务执行。接纳锁覆盖上传至操作完成，一个大请求体同时在途；队列上限 8 个描述符。作业借用的输入一直保留到调用完成，客户端断开不会取消已经开始的刷新。运行代次随加载变化；定时器切出自动取消，网络通知合并，只交付连接状态。配对重置立即封锁新工作，等待 worker 归还借用任务和精确 ACK 后才落盘；所有有副作用的旧授权任务在执行前复验授权代次。HTTP 仅保留只读存活响应及旧入口 410，不再接纳控制任务。
 
 ABI 2 入口通过 `app_host_context_v2()` 取得 START=1、INPUT=2、TIMER=3、NETWORK_CHANGED=4、STOP=5；显式声明 2.1 的应用还可接收 BLE=6。每次入口必须调用一次 `app_host_complete_v2()`；结果缺失、重复、错误事件 ID/代次均视为运行错误。START 必须报告 APP_READY；显示应用还必须有本次真实显示完成凭据，才能确认候选。STOP 返回后先取消定时器、BLE 服务和事件，再卸载。基础逻辑看门狗 5 秒；同步显示及旧 ABI 1 调用预算 650 秒，常规管理客户端等待上限 660 秒；BLE 大包/兼容图片传输有 90 分钟外层预算，不能将其当作单次事件逻辑时限。看门狗重启设备，不强行卸载仍在执行的代码。
 
@@ -83,7 +86,7 @@ ABI 2 入口通过 `app_host_context_v2()` 取得 START=1、INPUT=2、TIMER=3、
 | `display_completed` | 最近事件的宿主显示凭据；非显示事件会清除此项 |
 | `generation` | 本次加载代次 |
 | `phase` / `last_result` | 最近工作阶段与结果；故障空闲仍可通过鉴权管理 |
-| `last_switch_source/target` | 最近 boot/http/button 来源及目标 |
+| `last_switch_source/target` | 最近 boot/ble/button 来源及目标；http 为历史来源 |
 | `ignored_buttons` | 被忙状态或事务变化抑制的短按计数，快照随后续事务更新 |
 | `cache_bytes` / `free_psram` / `minimum_free_psram` | 缓存占用、当前及本次开机最低 PSRAM 余量 |
 | `apps[].abi/inputs/button_eligible` | 已确认 active 版本能力；不会为了列名称执行第二个 ELF |

@@ -29,7 +29,7 @@ class ManifestTests(unittest.TestCase):
     def test_unknown_abi_capabilities_reserved_and_nonterminated_strings(self):
         p=minimal_elf("clock");off=struct.unpack_from("<I",p,32)[0]
         m=struct.unpack_from("<I",p,off+6*40+16)[0]
-        cases=[(0,0),(4,127),(8,3),(12,2),(16,2),(20,2),(120,1),(124,1)]
+        cases=[(0,0),(4,127),(8,3),(12,3),(16,2),(20,2),(120,1),(124,1)]
         for offset,value in cases:
             b=bytearray(p);struct.pack_into("<I",b,m+offset,value)
             self.assertFalse(self.valid(bytes(b)))
