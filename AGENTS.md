@@ -1,65 +1,64 @@
-# PhotoPainter host agent guide
+# photopainter-host agent guide
 
-**Current source baseline (2026-10-29):** ABI 2.3 authenticated message mailbox, existing ABI 2.2 CoC and persistent physical pairing v2. Host, photoframe v21 and plugin 0.3.1 are deployed; phone Web GATT returned a matching physical-completion receipt and the user confirmed image/orientation/colors. Saved-bond authentication and binding retention were exercised; the complete fresh-pair/reset and cross-platform matrix is not claimed. Source, deployment and evidence remain separate in the [status matrix](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-versions-and-limits.md).
-
-This is the canonical entry point for AI-assisted work on the three-repository PhotoPainter system. For a new computer, deployment, cross-repository change, or hardware investigation, read the complete project skill at [.agents/skills/develop-photopainter-stack/SKILL.md](.agents/skills/develop-photopainter-stack/SKILL.md) before acting.
-
-## Read order
-
-1. Read this file and `README.md`.
-2. Read the project Skill and only the references relevant to the task.
-3. Read `../photoframe/AGENTS.md` before changing the display component.
-4. Read `../ai-quota-frame/AGENTS.md` before changing the PC service.
-5. Run `python3 tools/doctor.py` before deployment or hardware diagnosis.
+Read this before changing the host firmware. Project-wide documentation (architecture, app API, Bluetooth design, maintenance) lives in the [esp32s3 docs](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/README.md). For a new computer, cross-repository work or hardware diagnosis, also read the project skill at [.agents/skills/develop-photopainter-stack/SKILL.md](.agents/skills/develop-photopainter-stack/SKILL.md).
 
 ## Repository role
 
-This repository owns the resident framework: network configuration/stack, authentication, application OTA/catalog, ELF loading, the single manager and generic host services. ABI 2 board I/O belongs to `photopainter_board`. PNG decoding, first-screen policy and the approved app-owned BLE receive protocol belong to `photoframe`; collection/rendering/sending belongs to `ai-quota-frame`.
+This repository owns the resident host firmware:
 
-The developer entry is the [framework Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/README.md). Keep framework README workflows about loading and managing applications. v2 retires fixed-token HTTP control with 410; historical contracts remain documentation only. The dedicated host BLE PNG commands remain compatibility code after BondAuth, not an extension target. The app-owned receive route stays in sibling photoframe; its protocol and validation remain application-owned.
+- BLE peripheral, physical pairing v2, per-connection authentication and the signed management protocol (`docs/ble-protocol.md`, `docs/ble-pairing-v2.md`);
+- the five-bank application catalog, A/B slots, package validation, trial/confirm/rollback and boot protection (`docs/app-catalog.md`);
+- ELF loading and the single App Manager that serializes every app call, catalog change and display;
+- host services for apps (ABI 2.0–2.3): display, cache, timer, time, app GATT service, CoC, generic message channel;
+- the board display/power component `components/photopainter_board`;
+- SD/NVS Wi-Fi configuration (`docs/wifi-config.md`);
+- the app SDK originals in `sdk/`.
 
-The host now loads an independent app ELF from A/B data slots. Read `docs-module-slots.md` for package, activation, confirmation and rollback. The explicit user-requested module update architecture supersedes the former embedded-only/no-module-update design.
+Other repositories own the rest: `photoframe` (PNG decoding, image transactions, example apps, SDK copy), `ai-quota-frame` (PC service, CLI, USB maintenance tool, browser plugin), `photopainter-console` (macOS GUI), `esp32s3` (documentation only).
 
-## Non-negotiable constraints
+## Constraints
 
-**User-authorized scope (2026-10-29):** Implement physical-button pairing and persistent owner binding. v2 BLE authentication uses a physically approved negotiated bond rather than the preconfigured push token. Old token-authenticated HTTP mutation/management endpoints return 410 and cannot bypass reset. Pairing/reset remain host system services, work when an APP is unavailable, and do not erase Wi-Fi or installed applications. See `docs/ble-pairing-v2.md` for the frozen wire contract. The earlier overnight restriction applied to that offline run; the later recorded daytime deployments were explicitly user-authorized. Future device/production operations still require authorization, and software approval alone is not hardware validation.
-
-- Target only the 7.3-inch 800×480 N16R8 ESP32-S3 PhotoPainter with Spectra 6.
-- Require ESP-IDF commit `5e6f53cdb31fe5708eae3f55af9737be2822db22`.
-- Resolve `espressif/elf_loader: ^1.3.3` from the Component Registry. Never fork, vendor, or patch it.
-- Do not base work on `aitjcize/esp32-photoframe` or a Waveshare complete firmware.
-- Do not add WebUI, album, whole-firmware OTA, Home Assistant, deep sleep, or an SD dependency for applications. The user-requested SD Wi-Fi boot source and first migration from NVS/wifi.txt are supported. Preserve valid JSON authority and atomic .tmp/.bak publication; never format the card. Independent per-app A/B updates are supported.
-- In v2, `/api/push`, `/api/module` and `/api/wifi` return 410 without executing control operations; `GET /health` remains read-only. Do not restore fixed-token control or add public exposure/port mapping. Paired BLE uses the same manager and validation paths.
-- Require matching authenticated BLE completion only after physical refresh plus final POWER_OFF. Historical HTTP 401/503/413/200 semantics apply only to v1 maintenance; a v2 HTTP 200 health response is not a display receipt.
-- Reject every invalid request before display I/O.
-
-Read `docs-multi-apps.md` for the five-bank application catalog, format-2 identity, switch trials, legacy migration, and SD/NVS Wi-Fi priority.
-
-Read `docs-runtime-v2.md` for ABI 2, cooperative events, host services, GPIO 4 switching and bounded boot recovery. Preserve ABI 1 and the existing five-bank layout.
+- Target only the 7.3-inch 800×480 Spectra 6 ESP32-S3 PhotoPainter, N16R8.
+- Require ESP-IDF commit `5e6f53cdb31fe5708eae3f55af9737be2822db22`. `CMakeLists.txt` and `tools/doctor.py` enforce it.
+- Use the Component Registry `espressif/elf_loader` 1.3.3 unmodified. Never fork, vendor or patch it. Never edit `managed_components/` or build output.
+- Do not base work on `aitjcize/esp32-photoframe` or a Waveshare complete firmware. Only the documented display pins and E6 timing are reused.
+- Keep `partitions.csv` unchanged. Host updates write only the factory partition at `0x10000`.
+- Out of scope: device WebUI, photo album, whole-firmware OTA, Home Assistant, deep sleep, public port mapping, a second HTTP service, app access to SD.
+- HTTP control routes return 410; only `GET /health` is served. Do not restore token-based control. All control goes through paired BLE and the same App Manager and validation paths.
+- Validate every request completely before any display I/O.
+- Keep `sdk/photopainter_app.h` and `sdk/abi2_imports.inc` byte-identical with `../photoframe/components/app_sdk/`. Published struct layouts are frozen; new capability means a new ABI minor version, new functions and new events.
+- Keep ABI 1 and older ABI 2 minor versions loadable.
+- When you change a wire format, command, limit or status field, update the matching page in `docs/` in the same change.
 
 ## Build and test
 
-The host builds independently of `photoframe`. The sibling layout is convenient for packaging module builds, but is no longer a host build dependency.
-
-```bash
+```sh
 . /path/to/esp-idf/export.sh
-git -C "$IDF_PATH" rev-parse HEAD
-idf.py set-target esp32s3
-idf.py build
+git -C "$IDF_PATH" rev-parse HEAD          # must print the pinned commit
+idf.py -B build-host -DSDKCONFIG=build-host/sdkconfig build
 python3 -m unittest discover -s tools -p 'test_*.py'
 python3 tools/doctor.py --strict
 ```
 
-The IDF revision check must match exactly. Do not edit generated build output or `managed_components`. Use `idf.py fullclean` only when a clean rebuild is necessary and never to discard unrelated source changes.
+- The host builds independently of sibling repositories.
+- Tests compile production C with the local `cc`, OpenSSL and ASan/UBSan. Set `PHOTOFRAME_TEST_ELF` to include a real app ELF and `IDF_PATH` to include the NVS generator check.
+- Use a fresh build directory when `sdkconfig.defaults` changes; an existing `sdkconfig` does not pick up new defaults.
+- Use `idf.py fullclean` only when a clean rebuild is required, never to discard unrelated changes.
 
 ## Hardware safety
 
-- Flash or provision only after explicit authorization and exact port identification.
-- Before flashing, back up and hash all 16 MiB of Flash. Back up an installed microSD unless the user explicitly waives it for that run.
-- Treat opening native USB serial as a device reset that can abort an active HTTP request.
-- Stop automatic pushers before one-shot display tests. Do not allow ambiguous transport failures to cause repeated panel refreshes.
-- Require an authenticated BLE image-completion receipt, then human visual confirmation. For explicitly selected legacy v1 only, HTTP push 200 has the historical display-completion meaning. An upload/staging acknowledgement is not physical completion. An e-paper image remains visible without power.
+- Flash or provision a device only with explicit user authorization and an exactly identified port.
+- Before any Flash write, back up all 16 MiB and verify the hash. Back up an installed microSD unless the user waives it for that run. Prefer `ai-quota-frame/deploy/usb-maintenance.py`, which does both and writes only factory.
+- Never run `idf.py flash` or a whole-chip write on a device in use; it overwrites the partition table, NVS and app slots.
+- Writing a full NVS image (`tools/provision.py --port`, `usb-provision`) also erases the pairing owner.
+- Opening the native USB serial port can reset the device. Do not use it as a liveness check.
+- Stop automatic pushers before one-shot display tests. After an ambiguous image commit, query the original receipt; never resend.
+- Display success requires a matching signed completion receipt plus human confirmation of content, orientation and colors. Upload or staging success is not display success. A retained e-paper image does not prove the device is powered or running.
 
 ## Secrets
 
-Never open, print, commit, or paste `secrets.env`, NVS images, Flash/SD backups, or token-bearing logs. Trusted provisioning and push tools may consume secrets without displaying them. Keep secret files outside generated artifacts and confirm ignore rules before Git operations.
+Never open, print, commit or paste `secrets.env`, private Wi-Fi files, NVS images, Flash or SD backups, or logs containing credentials. Tools may consume these files without displaying them. Check `.gitignore` before Git operations.
+
+## Commits
+
+Do not commit, push or flash unless the user asks. Keep unrelated user changes intact.

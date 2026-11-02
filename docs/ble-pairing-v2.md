@@ -1,184 +1,218 @@
-# PhotoPainter physical pairing v2
+# 配对 v2 规格
 
-Protocol contract frozen 2026-10-29. The host owns pairing, its system display,
-physical button and NVS. No application receives a pairing key. Existing image,
-APP management and CoC framing remains unchanged after BondAuth.
+这一页是宿主配对协议（op 18–23）的字节级规格：编码约定、每个命令的请求和回复、密钥派生、状态机、时间限制，以及长按重置时宿主做了什么。实现在 `main/pairing.c`（状态机和密码学）、`main/app_pairing.c`（与 App Manager 和屏幕的衔接）、`main/pairing_store.c`（NVS 存储）。
 
-"No application receives a key" describes the SDK boundary. Installed APPs
-remain trusted native ELF code in shared address space, not a process sandbox.
-Physical reset revokes client relationships; it is not a factory wipe or a safe
-transfer guarantee in the presence of an already-installed malicious APP.
+配对的原理、完整流程图和用户操作步骤见 [蓝牙通信](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/06-bluetooth.md#4-配对-v2)。分片写入、签名会话和其他命令见 [宿主蓝牙线上协议](ble-protocol.md)。
 
-**尚未实机验证 / not hardware-validated.** The implementation has offline state-
-machine, storage, concurrency and cross-language vector coverage. Physical
-button approval, reboot persistence, reset/re-pair and actual image completion
-must be recorded on the target device before claiming end-to-end acceptance.
+## 概要
 
-## Identity, framing and encodings
+- 配对由宿主负责：配对画面、功能键（GPIO4）确认、NVS 里的主人记录都属于宿主。应用拿不到任何配对密钥。
+- 相框同一时间只认一个主人。换主人只能在相框上长按功能键重置。
+- 配对通过 P-256 ECDH 得到双方共享的根密钥 `root`，双方各自从同一份通信记录算出六位码，用户核对一致后短按功能键批准。
+- 以后每次连接，客户端用 `root` 做 BondAuth（op 23），得到本次连接的会话密钥。
+- 旧的固定令牌鉴权（op 1）总是被拒绝。
 
-The 20-byte discovery record is unchanged except byte 0 is **2**. The permanent
-service/characteristic UUIDs and `offset:u16le,total:u16le,fragment` writes remain
-unchanged (logical frame <=512 bytes). The advertisement name is `PP-XXXX` (the last four stable-ID hexadecimal
-digits), placed in advertising data; the manufacturer scan record is unchanged.
-The 32-byte Challenge is fresh for every
-GAP connection. Its first 16 bytes are the proposed binding ID for a new pairing.
-A physical reset disconnects the peer and thus forces a new proposal.
+## 编码约定
 
-All integers below are unsigned little endian. `D` is the six stable device-ID
-bytes. `CID` is a random, nonzero 16-byte client identity. `BID` is a nonzero
-16-byte binding identity proposed by the device's Challenge (not supplied
-arbitrarily by a new owner). Public keys are P-256 uncompressed SEC1, 65 bytes,
-starting with 0x04; private keys are 32 bytes. Nonces are 32 bytes. Client name
-`N` is 1..32 printable ASCII bytes (0x20..0x7e), with no leading/trailing spaces;
-its one-byte length is `L`. Names are display hints, not authenticated identity
-until the full transcript and physical confirmation succeed.
+所有整数是无符号小端序，域名字符串按 ASCII 拼接、不带 NUL。
 
-Every reply starts `op:u8 | sequence:u32le=0 | code:u16le`. Codes use the existing
-BLE enum: 0 OK, 1 unauthorized, 2 no binding, 3 busy, 4 invalid, 8 state conflict,
-10 persistence error, 11 expired, 13 physical display error. A reply that should
-be signed is invalid unless its exact length, echoed IDs/challenge and MAC match.
-Unsigned discovery/errors never establish identity or successful pairing.
+| 符号 | 含义 |
+|---|---|
+| `V` | 协议版本字节 `0x02` |
+| `D` | 6 字节设备 ID |
+| `CID` | 客户端身份，16 字节随机非零值，由客户端生成 |
+| `BID` | 关系身份，16 字节非零值。新配对时必须等于本次连接 Challenge 的前 16 字节 |
+| `Cpub`、`Spub` | 客户端、相框的 P-256 公钥，65 字节未压缩格式，以 `0x04` 开头 |
+| `Cnonce`、`Snonce` | 32 字节随机数 |
+| `N`、`L` | 客户端名称和它的长度字节。名称 1–32 个可打印 ASCII 字符（`0x20`–`0x7e`），首尾不能是空格 |
+| `S` | 本次连接的 32 字节 Challenge（特征 `7b9d0003`） |
 
-States: 0 unbound, 1 waiting_reveal, 2 waiting_client_ready, 3 displaying,
-4 awaiting_button, 5 bound, 6 cancelled, 7 expired, 8 fault. Unbound/fault states
-never grant management access. A corrupt NVS binding fails closed until physical
-reset; it never falls back to the old token.
+op 18–23 是“裸”请求：`op` 后面直接跟参数，不带序号和签名。回复以 7 字节头开头：
 
-## Bootstrap operations
+```
+op:u8 | sequence:u32=0 | code:u16
+```
 
-| op | request after op byte | success payload after 7-byte header | signature |
-|---|---|---|---|
-| 18 PairInfo | empty | `2:u8,state:u8,BID:16,CID:16,remaining_ms:u32,L:u8,N:L` | none |
-| 19 PairCommit | `CID:16,BID:16,Ccommit:32,L:u8,N:L` | `2:u8,BID:16,Spub:65,Scommit:32` | none |
-| 20 PairReveal | `BID:16,Cpub:65,Cnonce:32` | `2:u8,BID:16,Snonce:32,state:u8,remaining_ms:u32,Challenge:32` | root / response |
-| 21 PairPoll | `BID:16,proof:32` | `2:u8,BID:16,state:u8,remaining_ms:u32,Challenge:32` | root / response |
-| 22 PairCancel | `BID:16,proof:32` | same as PairPoll | root / response |
-| 23 BondAuth | `CID:16,BID:16,Cnonce:32,proof:32` | original 20-byte discovery record | session / existing response |
+`code` 沿用 [错误码](ble-protocol.md#错误码) 表。下文“带 root 签名”的回复，在末尾追加：
 
-PairInfo reports the current binding/candidate IDs and name. When there is no
-candidate or binding, BID is Challenge[0:16], CID/name are zero/empty. PairCommit
-is admitted only while unbound, and a new BID must equal Challenge[0:16]. Exact
-repeats of an in-progress CID/BID/commit/name return the original server public
-key/commitment without regenerating secrets. A different active candidate is BUSY. After cancellation/expiry and cooldown, a
-new pairing is allowed only with a fresh BID from a new connection; a terminal
-BID cannot be reused. A bound device returns STATE and requires a physical reset for a new owner.
+```
+HMAC(root, "pp-pair-v2/response" || 回复头和负载)
+```
 
-## Commitment, key derivation and comparison
+长度、回显的 ID、Challenge 或签名任何一项不对的回复，客户端都要当作无效。未签名的回复（包括 PairInfo）不能证明身份或配对成功。
 
-Concatenation uses raw bytes and ASCII domain strings with **no NUL terminator**.
-The protocol byte `V` is one byte 0x02. Roles are separated by these domains:
+## 命令
+
+| op | 名称 | 请求（`op` 之后） | 成功回复（7 字节头之后） | 回复签名 |
+|---:|---|---|---|---|
+| 18 | PairInfo | 空 | `2, state, BID:16, CID:16, remaining_ms:u32, L, N` | 无 |
+| 19 | PairCommit | `CID:16, BID:16, Ccommit:32, L, N` | `2, BID:16, Spub:65, Scommit:32` | 无 |
+| 20 | PairReveal | `BID:16, Cpub:65, Cnonce:32` | `2, BID:16, Snonce:32, state, remaining_ms:u32, S:32` | `root` |
+| 21 | PairPoll | `BID:16, proof:32` | `2, BID:16, state, remaining_ms:u32, S:32` | `root` |
+| 22 | PairCancel | `BID:16, proof:32` | 同 PairPoll | `root` |
+| 23 | BondAuth | `CID:16, BID:16, Cnonce:32, proof:32` | 20 字节发现记录 | 会话密钥，见下文 |
+
+`remaining_ms` 是当前阶段剩余的毫秒数，没有期限时为 0。
+
+**PairInfo（18）**：返回当前状态。已绑定时返回主人的 BID、CID 和名称；有候选时返回候选的；两者都没有时，BID 是 Challenge 前 16 字节，CID 全零，名称为空。
+
+**PairCommit（19）**：开始一次配对。
+
+| 情况 | 结果 |
+|---|---|
+| 已有主人 | 8 |
+| 存储故障 | 10 |
+| 参数格式错误、BID 不等于 Challenge 前 16 字节 | 4 |
+| 另一个候选正在进行，或距上一次开始不足 60 秒 | 3 |
+| 与正在进行的候选完全相同的重复请求 | 返回原来的 `Spub` 和 `Scommit`，不重新生成密钥 |
+| 同一 BID 但其他参数不同 | 3 |
+| 同一 BID 的候选已经取消或过期 | 11 |
+
+**PairReveal（20）**：客户端揭示公钥和随机数。宿主核对 `Ccommit`，不符时这次配对被取消并返回 1。核对通过后宿主算出 `root` 和六位码，状态变为 `waiting_client_ready`。用同样的参数重复 PairReveal 会得到同样的回复。BID 不对或状态不允许时返回 8。
+
+**PairPoll（21）**：客户端证明自己已经保存了 `root`。状态为 `waiting_client_ready` 时，第一次有效的 PairPoll 让宿主开始显示配对画面。对已绑定的主人，PairPoll 返回 `state=5`。
+
+**PairCancel（22）**：取消自己的候选。对已绑定的关系返回 8。
+
+PairPoll 和 PairCancel 的证明：
+
+```
+proof  = HMAC(root, domain || V || D || CID || BID || S)
+domain = "pp-pair-v2/poll" 或 "pp-pair-v2/cancel"
+```
+
+证明和回复都绑定当前连接的 Challenge，录下来的旧数据不能在新连接上重放。证明不对返回 1。
+
+## 承诺、密钥与六位码
 
 ```
 Ccommit = SHA256("pp-pair-v2/client-commit" || V || D || CID || BID || Cpub || Cnonce || L || N)
 Scommit = SHA256("pp-pair-v2/server-commit" || V || D || CID || BID || Ccommit || Spub || Snonce || L || N)
-T = V || D || CID || BID || Ccommit || Scommit || Cpub || Cnonce || Spub || Snonce || L || N
-Z = P256-ECDH(Cprivate, Spub) = P256-ECDH(Sprivate, Cpub)  # 32-byte x coordinate
-salt = SHA256("pp-pair-v2/salt" || T)
-root = HKDF-SHA256(ikm=Z, salt=salt, info="pp-pair-v2/bond", length=32)
-code = LE32(HMAC-SHA256(root, "pp-pair-v2/code" || T)[0:4]) mod 1000000
+T       = V || D || CID || BID || Ccommit || Scommit || Cpub || Cnonce || Spub || Snonce || L || N
+Z       = P256-ECDH(自己的私钥, 对方公钥)              // 32 字节 x 坐标
+salt    = SHA256("pp-pair-v2/salt" || T)
+root    = HKDF-SHA256(ikm=Z, salt=salt, info="pp-pair-v2/bond", 长度 32)
+code    = LE32(HMAC(root, "pp-pair-v2/code" || T)[0:4]) mod 1000000
 ```
 
-Display `code` as exactly six decimal digits, including leading zeros. The
-server never sends the code in a public characteristic. The client commits its
-key/nonce before learning the server nonce; the server commits its key/nonce
-before the client reveals. Both commitments must be checked exactly.
+- 客户端在看到 `Snonce` 之前就承诺了自己的公钥和随机数；宿主在客户端揭示之前就承诺了自己的。双方都必须严格核对对方的承诺。
+- 六位码显示为 6 位十进制数，保留前导零。宿主不会在任何公开特征里发送它。
+- `tests/ble/pairing-v2.json` 是一组固定输入的测试向量（由独立的 OpenSSL 实现生成），宿主 C 测试和客户端测试都用它核对。
 
-The PairReveal / PairPoll / PairCancel reply MAC is appended as 32 bytes:
-`HMAC-SHA256(root, "pp-pair-v2/response" || entire_header_and_payload)`.
+## 状态
 
-Poll/Cancel proof is:
-`HMAC-SHA256(root, domain || V || D || CID || BID || current_Challenge)` where
-`domain` is respectively `pp-pair-v2/poll` or `pp-pair-v2/cancel`. Binding each
-proof/reply to the current Challenge prevents cross-connection reply replay.
+| 值 | 名称 | 含义 |
+|---:|---|---|
+| 0 | `unbound` | 没有主人，可以配对 |
+| 1 | `waiting_reveal` | 收到 PairCommit，等 PairReveal |
+| 2 | `waiting_client_ready` | 双方都算出了六位码，等第一次 PairPoll |
+| 3 | `displaying` | 正在刷新配对画面 |
+| 4 | `awaiting_button` | 画面已刷完，等用户短按功能键 |
+| 5 | `bound` | 已有主人 |
+| 6 | `cancelled` | 本次配对已取消 |
+| 7 | `expired` | 本次配对超时 |
+| 8 | `fault` | 存储故障，只能长按重置 |
 
-The client durably stores the candidate root and identity before its first
-PairPoll. This first valid root proof arms the device prompt. PairReveal alone
-never displays an actionable confirmation and cannot be physically approved.
-
-## Physical confirmation and lifetime
-
-The host serializes a pairing screen through its sole App Manager/display
-admission. It shows the client name and six digits. Only after the complete
-physical refresh plus POWER_OFF succeeds does state become awaiting_button.
-The same short button gesture must begin and end during that exact candidate's
-awaiting_button state. A press during rendering/another operation never counts.
-
-A valid short press commits the single binding NVS blob (CID, BID, root, name)
-before state becomes bound. Failed persistence does not authenticate the client.
-Physical reset writes a valid versioned unbound tombstone instead of erasing
-the owner key. Only a namespace that has never existed is factory-unbound;
-an existing namespace with a missing/corrupt owner is a storage fault, including
-the NVS lower-layer CRC failure that erases a blob then returns NOT_FOUND.
-After acceptance the host shows a bound/ready system screen; unrelated APPs are
-not switched or updated. The next normal app picture replaces this screen.
-
-A release after holding the button for at least 8 seconds latches a physical
-reset request, including while an image is refreshing. It immediately revokes
-GATT/CoC authorization and blocks new work/displays. The already-started physical
-refresh completes through POWER_OFF; then the binding and pending candidate are
-durably cleared and a ready-to-pair screen is shown. Reset does not erase Wi-Fi,
-installed APPs or the last picture cache. No remote operation can clear or
-replace a bound owner.
-
-Neither an upload's held admission nor back-to-back physical refreshes can
-prevent this gesture. Display begin and reset request use one atomic control
-gate: an existing refresh continues, but no later refresh can begin after the
-request. The transport owner thread finishes/cancels its
-current local request, closes its session and releases upload buffers/admission,
-then acknowledges the exact reset serial. The manager cancels old queued jobs
-and commits the tombstone only after this acknowledgment. Every BLE job also
-carries the captured authorization epoch, checked again before its side effect.
-Bootstrap frames use the connection-open epoch, so old public challenges cannot
-recreate a candidate after reset. Existing running manager work is bounded and
-finishes before the reset commit; queued old-owner work does not run afterward.
-
-Waiting-reveal and waiting-client-ready deadlines are 30 seconds each. Prompt
-rendering has the existing 650-second display budget; confirmation lasts 120
-seconds after the prompt physically completes. One candidate at a time; at
-least 60 seconds between distinct starts. Cancellation and expiry never create
-an owner. PairCancel requires the candidate root proof and is refused after
-binding. If a connection drops, the candidate may be resumed by its exact BID
-and root proof within its lifetime. Reboot loses an unapproved RAM candidate.
-A persisted approved owner can prove it after reconnecting even if the original
-approval reply was lost.
-
-## BondAuth and existing operations
-
-The client uses its saved CID/BID/root. The current GATT Challenge is `S`:
-
-```
-A = V || D || CID || BID || S || Cnonce
-proof = HMAC-SHA256(root, "pp-bond-v2/client" || A)
-session = HMAC-SHA256(root, "pp-bond-v2/session" || A)
+```mermaid
+stateDiagram-v2
+    [*] --> unbound
+    unbound --> waiting_reveal: PairCommit
+    waiting_reveal --> waiting_client_ready: PairReveal 校验通过
+    waiting_reveal --> cancelled: Ccommit 不符
+    waiting_client_ready --> displaying: 第一次有效 PairPoll
+    displaying --> awaiting_button: 画面刷新完成
+    displaying --> fault: 画面刷新失败
+    awaiting_button --> bound: 短按功能键且 NVS 写入成功
+    awaiting_button --> fault: NVS 写入失败
+    waiting_reveal --> cancelled: PairCancel
+    waiting_client_ready --> cancelled: PairCancel
+    displaying --> cancelled: PairCancel
+    awaiting_button --> cancelled: PairCancel
+    waiting_reveal --> expired: 超时
+    waiting_client_ready --> expired: 超时
+    displaying --> expired: 超时
+    awaiting_button --> expired: 超时
+    cancelled --> waiting_reveal: 新 BID 的 PairCommit
+    expired --> waiting_reveal: 新 BID 的 PairCommit
+    bound --> unbound: 长按重置
+    fault --> unbound: 长按重置
 ```
 
-One authentication attempt per fresh Challenge, including malformed attempts.
-BondAuth success is op 23, sequence 0, code 0, discovery record, then
-`HMAC-SHA256(session, "pp-ble-v1/response" || header_and_record)`.
-Normal signed requests/replies (ops 2..17), sequence rules, APP target pinning,
-PFI1 receipts and CoC key derivation use the existing contracts with this new
-session key. Pairing does not report an image refresh as complete.
+`unbound` 和 `fault` 状态下，任何管理命令都不可用。
 
-Old op 1 fixed-token authentication is permanently rejected by v2 firmware.
-Legacy HTTP token-authenticated mutation/management routes return 410 and never
-execute, so an old NVS token cannot bypass physical reset. BLE management remains
-available to the paired owner. Credentials are never emitted into logs/status.
-Clients must pin BID alongside device ID for pending image recovery; after a
-binding change, they must not recover or redraw an earlier owner's transaction.
+## 时间限制
 
-Pairing establishes authenticated ownership and fresh signed sessions. Existing
-GATT/CoC image payloads retain their previous wire format: authentication and
-integrity are provided, but this protocol does not claim radio confidentiality.
+| 阶段 | 限制 |
+|---|---|
+| `waiting_reveal` | 30 秒 |
+| `waiting_client_ready` | 30 秒 |
+| `displaying` | 650 秒（与应用显示的预算相同） |
+| `awaiting_button` | 画面刷完后 120 秒 |
+| 两次不同配对的开始之间 | 至少 60 秒 |
 
-### Connection-local GATT write capacity
+同一时间只有一个候选。连接中途断开时，客户端可以在有效期内用同一个 BID 和 `root` 证明继续。相框重启会丢掉还没批准的候选。取消或过期的 BID 不能再用，新配对要重新连接，拿新的 Challenge。
 
-The host exposes read-only characteristic `7b9d0006-6c82-4f31-9a48-6f5061696e74`.
-Its three-byte value is `version:u8=1, write_capacity:u16le`, where capacity is
-`min(512, negotiated_ATT_MTU - 3)`, including the four-byte fragment header.
-The browser reads it before each exchange, validates a 20..512 byte capacity,
-and splits requests into `capacity - 4` byte payloads. MTU 247 therefore allows
-240 payload bytes per acknowledged write; MTU 23 retains 16. The updated browser
-requires this characteristic; deploy the matching host before updating the plugin.
-The APP ABI remains limited to 128-byte values (106 image bytes per CHUNK).
-No authentication, application ABI, completion or retry semantics change.
-This optimization has not been hardware-validated.
+## 屏幕与按键
+
+- 配对画面通过 App Manager 显示，和应用的显示共用同一个通道。画面显示客户端名称和六位码。
+- 画面刷新完成、屏幕断电之后，状态才变成 `awaiting_button`。
+- 按下和松开都发生在 `awaiting_button` 内、按住 50–600 毫秒的短按才算批准。画面还在刷新时的按键不算。
+- 批准时宿主先把 `CID`、`BID`、`root` 和名称写入 NVS，成功后才变成 `bound`，并显示“已配对”画面。写入失败时变成 `fault`，客户端不会被认可。
+- 宿主显示配对画面和等待按键期间，暂停向应用投递事件，结束后恢复。
+- 没有主人时，短按只用于确认配对；已绑定后，短按功能键用来切换应用（见 [应用目录与槽位](app-catalog.md#功能键)）。
+
+## 主人记录
+
+主人记录保存在 `nvs` 分区的 `pp_pair` 命名空间，键 `owner`，是一个带版本和摘要的单个 blob。
+
+| 读到的情况 | 结果 |
+|---|---|
+| 命名空间从未存在 | 未绑定 |
+| 有效的未绑定标记 | 未绑定 |
+| 有效的主人记录 | 已绑定 |
+| 命名空间存在但没有记录、记录损坏、存储无法初始化 | `fault`，只能长按重置 |
+
+NVS 遇到 CRC 损坏的条目时会擦掉它并报告“找不到”，所以“命名空间存在但没有记录”也按故障处理。
+
+整块重写 NVS 分区（例如 `tools/provision.py` 加 `--port`）会清掉主人记录，之后要重新配对。
+
+## 长按重置
+
+按住功能键至少 8 秒再松开，宿主锁存一个重置请求，正在刷屏时也一样。开机时一直按住不算。
+
+1. 宿主立即撤销当前连接的 GATT 和 CoC 授权，并拒绝新的工作和新的显示。
+2. 已经开始的刷新继续完成，直到屏幕断电。
+3. 传输工作线程结束或取消手头的请求，关闭会话，释放上传缓冲和准入锁，然后确认这次重置。
+4. App Manager 取消旧主人排队的作业，写入有效的未绑定标记（不是直接擦除），清掉候选，并显示“可以配对”画面。
+
+正在进行的上传或连续刷屏都挡不住这个操作。每个蓝牙作业都带着发起时的授权代次，在产生副作用之前再核对一次，所以重置之后旧主人排队的作业不会执行。
+
+长按重置只清除配对关系，Wi-Fi 配置、已安装的应用和最后一帧画面的缓存都保留。它不是出厂重置。应用是和宿主共享地址空间的原生代码，重置不能清除已安装应用自身的行为。
+
+## BondAuth（op 23）
+
+已配对的客户端每次连接都这样鉴权：
+
+```
+A       = V || D || CID || BID || S || Cnonce
+proof   = HMAC(root, "pp-bond-v2/client"  || A)
+session = HMAC(root, "pp-bond-v2/session" || A)
+```
+
+| 情况 | 结果 |
+|---|---|
+| 本连接已经尝试过一次 BondAuth，或已经鉴权 | 1 |
+| 没有主人，或存储故障 | 2 |
+| CID、BID 与主人不符，长度不对，或证明不对 | 1 |
+| 成功 | `op=23, sequence=0, code=0`，20 字节发现记录，再加 `HMAC(session, "pp-ble-v1/response" || 回复头和记录)` |
+
+每个 Challenge 只允许一次鉴权尝试，格式错误也算一次，失败后要断开重连。成功后，`session` 就是 [签名请求](ble-protocol.md#签名请求与回复) 里的会话密钥 `K`，CoC 的方向密钥也从它派生。
+
+客户端为未确认的图片事务保存了 BID 时，重连后发现 BID 变了（相框被重置并换了主人），就不能再恢复或重画那次事务。
+
+## 安全边界
+
+- 配对建立的是身份认证和完整性：别人改不了数据，也冒充不了主人。图片、安装包和状态在空中是明文，附近的人能看到内容。
+- 设备 ID 固定不变，附近的人可以通过广播长期识别同一台相框。
+- 鉴权在应用层完成，不使用操作系统的蓝牙配对（SMP）或链路加密。
+- HTTP 只保留 `GET /health`，其他旧控制接口一律返回 410，旧令牌不能绕过长按重置。

@@ -1,48 +1,62 @@
-# PhotoPainter Host 应用框架
+# photopainter-host
 
-当前宿主提供 **物理配对 v2、ABI 2.3 通用消息通道和 ABI 2.2 单所有权 CoC**。配合 photoframe v21 与浏览器插件 0.3.1，手机 Web GATT 已完成签名显示回执及人眼画面、方向、颜色验收：67,626 字节上传 7.9 秒，刷新等待 20.3 秒。接口见 [ABI 2.3](docs/abi-2-3-channel.md)，完整证据见 [当前状态](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-versions-and-limits.md)。本轮没有重新验收首次物理配对、长按换绑、手机原生 CoC 或 Wi-Fi。
+PhotoPainter 相框的宿主固件（ESP-IDF 工程）。宿主写在 factory 分区，开机即运行，负责所有底层且共用的事：蓝牙、配对与鉴权、应用目录和 A/B 槽、加载与调度应用、屏幕驱动、功能键、Wi-Fi。具体业务（开机首屏、收图、显示什么）由宿主加载的独立应用完成，默认应用是 [photoframe](https://github.com/M1nt-Ch0c0/photoframe)。
 
-**版本与证据：**宿主源码、装机二进制摘要、APP/插件版本和不同平台的实测范围分别记录；2026-10-27 的 v20/Mac CoC 成功仍保留为历史证据，不能代替新版本或其他平台验收。
+这一页讲这个仓库有什么、怎么构建和测试、怎么打包应用、怎么发布宿主固件。整个项目的介绍和原理在 [项目文档](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/README.md)，其中与宿主关系最紧的是：
 
-本仓库是 ESP32-S3 PhotoPainter 的常驻框架：负责设备通信、鉴权、独立应用安装、ELF 加载、统一调度、切换与宿主服务。业务页面、图片解码和应用自身协议属于 APP。
+- [设备是怎么工作的](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/03-how-the-device-works.md)：宿主与应用的分工、生命周期、A/B 槽、启动保护、显示链路
+- [应用接口参考](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/05-app-api-reference.md)：应用能调用的宿主服务（ABI 2.0–2.3）
+- [蓝牙通信](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/06-bluetooth.md)：配对、会话、管理命令和图片事务的设计
+- [维护与排错](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/08-maintenance.md)：备份、USB 刷写宿主、恢复
 
-**物理配对 v2：**设备在网页发起配对后显示六位码，核对一致并短按 GPIO 4 功能键确认；绑定关系持久保存，后续连接自动证明已保存的关系。功能键长按 8 秒并松开可清除绑定。BOOT（GPIO 0）和电源键（GPIO 5）不参与此操作。配对是宿主系统界面，即使业务 APP 故障空闲也能使用；不更改 Wi-Fi、应用目录或显示 ABI。精确协议见 [配对 v2](docs/ble-pairing-v2.md)，验证范围见 [配对验证](docs/validation-pairing-v2-2026-10-29.md)。
+## 硬件与工具链
 
-**开发从 [PhotoPainter 开发者 Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/README.md) 开始。** AI 协作先读 [AGENTS.md](AGENTS.md) 和项目 [Skill](.agents/skills/develop-photopainter-stack/SKILL.md)。
-
-## 框架能力
-
-| 部分 | 已提供的能力 |
+| 项目 | 要求 |
 |---|---|
-| 通信与鉴权 | Wi-Fi 配置/连接、常驻 NimBLE、设备发现、物理配对与持久 owner、逐连接双向 HMAC |
-| 应用管理 | 五个 APP、各自 A/B、备用槽上传、显式试运行、确认、回滚和有界启动恢复 |
-| 运行层 | 单 ELF 前台运行，ABI 1 兼容及 ABI 2.0/2.1/2.2/2.3 合作式事件 |
-| 宿主服务 | 六色逻辑帧显示、RAM 缓存、时间、定时器、受管 GATT、单所有权 CoC 和通用消息邮箱 |
-| 切换与清理 | GPIO 4 配对确认/长按解绑，已绑定且无配对请求时短按仍选择已确认 ABI 2 APP |
+| 硬件 | 微雪 ESP32-S3 PhotoPainter，N16R8（16 MiB Flash、8 MiB PSRAM），7.3 英寸 800×480 Spectra 6 六色电子纸 |
+| ESP-IDF | 固定提交 `5e6f53cdb31fe5708eae3f55af9737be2822db22`（6.0.3）。`CMakeLists.txt` 会检查，不符时拒绝构建 |
+| ELF 加载器 | 组件仓库的 `espressif/elf_loader` 1.3.3，不修改 |
+| 其他组件 | `espressif/cjson` 1.7.19 |
 
-当前 SDK 向 APP 提供网络连接状态、受管 GATT 和 CoC，尚未提供通用 Wi-Fi socket / HTTP client ABI。应用是受信任原生代码，不是隔离进程。
+## 仓库结构
 
-v2 不读取或接受旧 `push_token`，BLE op 1 永久拒绝；旧 `/api/push`、`/api/module`、`/api/wifi` 返回 410，不执行请求。`GET /health` 保留无显示副作用的存活探测。已配对 owner 继续通过 BLE 执行应用管理；Wi-Fi 配置仍可通过既有 SD/USB 维护，不能拿旧 token 绕过物理解绑。
+| 路径 | 内容 |
+|---|---|
+| `main/` | 宿主源码：蓝牙协议与传输、配对、应用目录与槽位、启动保护、App Manager、宿主服务、Wi-Fi、HTTP 健康检查 |
+| `components/photopainter_board/` | 屏幕和电源驱动，把应用的逻辑帧旋转打包后送上电子纸，见 [组件说明](components/photopainter_board/README.md) |
+| `sdk/` | 应用 SDK 原件：`photopainter_app.h`（接口和结构体）、`abi2_imports.inc`（允许导入的符号）。photoframe 仓库的 `components/app_sdk/` 是它的副本，两边必须一致 |
+| `tools/` | 打包、配网、诊断工具和 Python 测试 |
+| `tests/` | 由 Python 测试编译运行的 C 原生测试和桩 |
+| `docs/` | 宿主专属的协议和规格，见下文 |
+| `partitions.csv` | 分区表 |
 
-相框 APP 保留自己的收图、校验、断线处理与完成回执；宿主提供通用通信、鉴权、OTA、调度和显示。2026-10-27 的 CoC 扩展改善连续传输，不把 PNG 业务移回宿主。当前验收范围见 [状态页](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-versions-and-limits.md)。保留旧兼容通道，不继续扩展专用 PNG 宿主协议。
-
-## 框架开发与验证
-
-仅支持 N16R8、800×480 Spectra 6 PhotoPainter。固定 ESP-IDF `5e6f53cdb31fe5708eae3f55af9737be2822db22` 和未修改的 Registry elf_loader 1.3.3。
+## 构建
 
 ```sh
-. /absolute/path/to/pinned-esp-idf/export.sh
-git -C "$IDF_PATH" rev-parse HEAD
+. /path/to/esp-idf/export.sh          # 固定提交的 ESP-IDF
 idf.py -B build-host -DSDKCONFIG=build-host/sdkconfig build
-python3 -m unittest discover -s tools -p 'test_*.py'
-python3 tools/doctor.py
 ```
 
-使用独立构建目录，避免旧 sdkconfig 缺少 BLE 配置；不要编辑 managed components 或生成产物。宿主不嵌入、也不要求构建兄弟业务 ELF。ABI 兼容的业务更新只需重新构建并安装 APP。
+产物是 `build-host/photopainter_host.bin`。用独立的构建目录和 sdkconfig，可以保证 `sdkconfig.defaults` 里的蓝牙等配置都生效。宿主独立构建，不依赖兄弟仓库，也不内嵌任何应用。
 
-## 应用打包与管理
+## 测试
 
-先构建目标 APP，然后在本仓库打包：
+```sh
+python3 -m unittest discover -s tools -p 'test_*.py'
+```
+
+测试会用本机的 `cc` 编译宿主的生产 C 代码（协议部分链接 OpenSSL，开启 ASan 和 UBSan），配合 `tests/` 下的平台桩运行。需要本机有 C 编译器和 OpenSSL 开发库。两个环境变量可以打开额外的集成检查：
+
+| 变量 | 作用 |
+|---|---|
+| `PHOTOFRAME_TEST_ELF=/path/to/app.elf` | 用一个真实的应用 ELF 检查宿主的 ELF 和清单校验 |
+| `IDF_PATH` | 调用 ESP-IDF 的 NVS 生成器检查 `provision.py` |
+
+`python3 tools/doctor.py` 检查本机开发环境：Python、Chrome、ESP-IDF 提交、`idf.py`、兄弟仓库和串口。默认不打开串口；加 `--probe-serial --serial 端口` 会打开串口抓启动日志，可能让设备复位。`--json` 输出 JSON，`--strict` 有失败项时返回非零。
+
+## 打包应用
+
+应用在各自的仓库里独立构建成 `.app.elf`，再用本仓库的工具打包成 `.pkg`：
 
 ```sh
 python3 tools/module.py package --app lifecycle --version 1 \
@@ -50,29 +64,41 @@ python3 tools/module.py package --app lifecycle --version 1 \
   --output /tmp/lifecycle-v1.pkg
 ```
 
-通过已完成物理配对的电脑端 BLE 客户端查询、暂存和激活：
+包格式、宿主的校验规则和安装后的槽位变化见 [应用目录与槽位](docs/app-catalog.md)。安装、激活、切换应用通过已配对的蓝牙客户端完成，例如 `ai-quota-frame ble install` 和 `ai-quota-frame ble activate`，或网页插件的开发者工具，见 [电脑端、控制台与网页插件](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/07-clients.md)。
 
-```sh
-ai-quota-frame ble status
-ai-quota-frame ble install --file /tmp/lifecycle-v1.pkg
-ai-quota-frame ble activate --app lifecycle
-```
+`tools/module.py` 的其他动作（`status`、`stage`、`activate` 等）走旧的 HTTP 接口。当前宿主对这些接口一律返回 410，只有 `package` 有用。
 
-首次先执行客户端的 `ble pair` 并在相框上核对六位码、按功能键同意；后续命令使用持久关系，不填写设备令牌。Mac 使用已有应用身份。安装/激活是有状态操作，执行前核对设备、目录和授权范围。完整流程见 [应用包与恢复](docs-module-slots.md)，生命周期见 [运行层规范](docs-runtime-v2.md)。
+## 发布宿主固件
 
-## 文档入口与职责
+宿主固件只通过 USB 更新，并且只写 factory 分区 `0x10000`。Wi-Fi、配对和已安装的应用都保留。不要对已经在用的相框执行 `idf.py flash`，它会覆盖分区表、NVS 和应用数据。
 
-- [宿主参考文档目录](docs/README.md)：协议、兼容接口与历史验收分开导航。
-- [功能基线 SDK 原件](https://github.com/M1nt-Ch0c0/photopainter-host/blob/b4709c0/sdk/photopainter_app.h) 与 [该基线允许导入](https://github.com/M1nt-Ch0c0/photopainter-host/blob/b4709c0/sdk/abi2_imports.inc)：APP 二进制接口的依据。
-- [常驻 BLE 协议](docs/ble-protocol.md)：发现、鉴权、包管理及应用特征桥接。
-- [目录与 Wi-Fi](docs-multi-apps.md)：五 bank、网络配置与存储约束。
-- [相框 APP](https://github.com/M1nt-Ch0c0/photoframe/tree/main)：输入格式、收图协议、应用示例。
-- [电脑端](https://github.com/M1nt-Ch0c0/ai-quota-frame/tree/main)：采集、渲染、发送和部署命令。
+推荐用 `ai-quota-frame` 仓库的 `deploy/usb-maintenance.py --action usb-flash`：它会核对设备身份、先完整备份 16 MiB Flash、检查分区表，再只写 factory。完整步骤见 [用 USB 更新宿主固件](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/08-maintenance.md#用-usb-更新宿主固件)。
 
-历史 HTTP 合同保存在 [兼容输入参考](docs/legacy-image-input.md)，在 v2 已统一退役为 410。旧宿主 PNG opcode 仍可在新 BondAuth 会话后作为兼容路径使用；新图片业务继续走 photoframe APP。应用开发不能绕过 SDK、manager 或输入校验。
+要使用新 ABI 的应用时，先升级宿主，再安装应用。宿主只接受 ABI 次版本不高于自己的应用（当前是 2.3）。
 
-## 设备维护边界
+## 网络接口
 
-应用 OTA 不写宿主 factory。当前项目不提供宿主整机 OTA，不改既有分区表。已具备五 bank 布局的设备，如另获授权更新框架，只写 `0x10000` 的宿主 bin；先准确识别设备、完整备份并校验 16 MiB Flash，有 microSD 时按项目要求备份。
+| 接口 | 用途 |
+|---|---|
+| 蓝牙管理服务 | 所有控制：配对、状态、安装和管理应用、应用通信。见 [宿主蓝牙线上协议](docs/ble-protocol.md) |
+| HTTP `GET /health`（端口 80） | 只用于探测相框是否在线，返回 `{"device":"PhotoPainter","protocol":2,"transport":"paired-ble"}` |
+| HTTP `/api/push`、`/api/module`、`/api/wifi` | 一律返回 410，不执行任何操作 |
 
-打开原生 USB 串口可能导致复位，不用于日常在线检查。不要打印/提交真实配置、令牌日志、NVS 或 Flash/SD 备份。Wi-Fi 配置、恢复和历史迁移分别按对应指南处理，不能把旧迁移命令当成日常 APP 更新步骤。
+## 文档
+
+`docs/` 里是这个仓库独有的精确规格，原理和使用说明在项目文档里：
+
+| 文档 | 内容 |
+|---|---|
+| [宿主蓝牙线上协议](docs/ble-protocol.md) | 广播、管理服务特征、分片写入、签名请求、错误码、op 1–28、状态 JSON |
+| [配对 v2 规格](docs/ble-pairing-v2.md) | op 18–23、密钥派生、状态机、主人记录、长按重置 |
+| [ABI 2.2 CoC 通道规格](docs/abi-2-2-coc.md) | CoC 的 hello、记录封套、方向密钥、流控 |
+| [ABI 2.3 消息通道规格](docs/abi-2-3-channel.md) | op 24–27、大小限制、会话与授权 |
+| [应用目录与槽位](docs/app-catalog.md) | 分区地址、安装包格式、目录、管理命令、启动记录、功能键 |
+| [Wi-Fi 配置](docs/wifi-config.md) | `config/wifi.json` 格式、SD 与 NVS 优先级、配置工具 |
+
+开发者助手的工作规则在 [AGENTS.md](AGENTS.md)。
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。屏幕驱动部分改编自微雪的 PhotoPainter 示例代码，保留其 MIT 声明（`components/photopainter_board/LICENSE.Waveshare.txt`）。

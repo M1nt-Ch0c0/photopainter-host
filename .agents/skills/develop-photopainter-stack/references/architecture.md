@@ -1,29 +1,36 @@
-# PhotoPainter implementation architecture
+# PhotoPainter architecture for implementers
 
-Canonical current contracts: [ABI 2 runtime](../../../../docs-runtime-v2.md), [five-bank storage and Wi-Fi](../../../../docs-multi-apps.md), and [reader-facing diagrams](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/01-overview.md).
+Reader-facing explanations are in the esp32s3 docs: [how the device works](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/03-how-the-device-works.md), [app API reference](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/05-app-api-reference.md) and [Bluetooth](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/06-bluetooth.md). Byte-level host contracts are in this repository's `docs/`. This page lists only the ownership boundaries and invariants to keep in mind when changing code.
 
-Pairing v2 source is implemented but **尚未实机验证 / not hardware-validated**.
-Use [the pairing contract](../../../../docs/ble-pairing-v2.md) for current authentication;
-old fixed-token firmware results are historical evidence only.
+## Ownership
 
-- `ai-quota-frame` owns quota access, layout, strict six-color PNG, outbound pushing and the serialized device backend. The independent `photopainter-console` repository owns the native GUI and calls that backend over its protected local socket. Automatic pushing does not select device apps and must not listen on the retired :8787 port.
-- `photopainter-host` owns physical pairing, NVS owner/tombstone, per-connection authentication, SD/NVS Wi-Fi, catalog, the only manager worker, ELF ABI dispatch, bounded services and ABI 2 board I/O. HTTP control is retired with 410; health is read-only.
-- `photoframe` owns PNG validation, logical graphics, initial pages and application restoration. Its default app ELF uses ABI 2; `PHOTOFRAME_ABI=1` and `.so` retain legacy board code.
-- `esp32s3` owns navigation and explanation; it participates in no build.
+| Repository | Owns |
+|---|---|
+| `photopainter-host` | BLE peripheral, pairing v2 and the NVS owner record, per-connection authentication, signed management protocol, five-bank catalog and A/B slots, boot protection, ELF loading, the single App Manager, host services (ABI 2.0–2.3), board display/power I/O, SD/NVS Wi-Fi, app SDK originals in `sdk/` |
+| `photoframe` | The default app: first screen and cache restore, strict PNG decoding, the image transaction protocol and its three adapters (ABI 2.1 GATT, 2.2 CoC, 2.3 channel), example apps, the SDK copy, the legacy ABI 1 app with its own driver |
+| `ai-quota-frame` | Quota collection, rendering of the six-color PNG, BLE client and CLI, background daemon, USB maintenance tool, CPM browser plugin |
+| `photopainter-console` | macOS GUI that talks to the `ai-quota-frame` daemon over its local socket |
+| `esp32s3` | Documentation only |
 
-The host never builds or embeds a sibling business ELF. Apps use the fixed IDF commit and Registry elf_loader 1.3.3, unchanged. ABI 2 imports only SDK services and allowlisted libc/compiler functions; ABI 1 retains original exports. Native ELF is trusted shared-address-space code, not a sandbox.
+The host never builds or embeds an app. Apps are trusted native ELF code in the host address space, not a sandbox.
 
-A display app's ABI 2 START is ready only after a correct result and a host-observed complete refresh. INPUT(PNG) is specific to compatible apps. STOP returns before unload. All sources use the same admission/manager boundary; client disconnect does not release live input. Stage/activate/switch remain explicit. GPIO 4 selects only confirmed ABI 2 active versions.
+## Runtime invariants
 
-During a pairing request GPIO4 short press confirms only after the complete
-comparison screen has been displayed and the client has durably stored its
-candidate. Holding at least 8 seconds and releasing always requests reset,
-including during a display. New work is rejected immediately, current physical
-display and borrowed inputs finish, then worker drain/exact ACK permits the
-manager to persist the unbound tombstone. Reset does not erase Wi-Fi or APPs.
+- Exactly one App Manager task runs every app entry, catalog change and display. BLE callbacks only copy data. Every source of work (BLE, button, timer, network) shares one admission lock.
+- Each event is reported exactly once with `app_host_complete_v2()`. START succeeds only with `APP_READY` and, for apps that declare `APP_REQUIRES_DISPLAY`, a completed display in that same START.
+- Event logic has a 5-second watchdog; a display call has 650 seconds. A timeout restarts the device.
+- Install, activate, switch, rollback and remove are explicit commands. Upload stages into the inactive slot and clears `previous`. There is no command to activate a chosen slot.
+- Boot protection allows one automatic fallback per app and treats any reset inside the boot window as a failure, except a USB reset.
+- The function key (GPIO4) short press switches to the next confirmed ABI 2 app when bound, and approves pairing during `awaiting_button`. Holding at least 8 seconds always requests a pairing reset, even during a refresh; the reset commits after the current refresh and borrowed inputs finish.
+- Every queued BLE job carries the authorization epoch and is rechecked before side effects.
+- Only the board component rotates and packs logical pixels. A display returns success only after the refresh and final power-off complete.
 
-PNG generation and decoding preserve opaque exact black/white/yellow/red/blue/green, 800×480, noninterlaced, no trailing bytes. Host board service alone rotates/packs logical ABI 2 pixels and preserves E6 final POWER_OFF completion. A matching signed BLE image result proves physical completion; upload/stage success and HTTP health 200 do not. BLE images borrow PSRAM through the same manager render call and retain bounded per-boot receipts for safe reconnect queries. Pending client transactions also pin the pairing BID.
+## Image contract
 
-Wi-Fi JSON authority and atomic .tmp/.bak migration/save are unchanged. No app receives pairing keys, Wi-Fi credentials or host usage keys. Runtime cache is optional RAM, not SD persistence. No device WebUI, whole-firmware OTA, background app tasks or new public service is added. The CPM browser plugin uses CPA's existing resources and a shared Go/WASM engine; its negotiated browser relationship and the native client's relationship are independent owners, transferred through physical reset.
+- PNG: 800×480, non-interlaced, fully opaque, only exact black/white/yellow/red/blue/green, no trailing data, at most 5 MiB. Validation completes before any panel I/O.
+- photoframe keeps the last four completion receipts in RAM; they are lost on reboot or app switch.
+- A client persists the transaction identity (device ID, BID, request ID, SHA-256, length, app generation) before COMMIT, and after a lost reply only queries that request.
 
-The framework/application boundary and current API guide are maintained in the [developer Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/README.md). The current image route is app-owned: photoframe v20 uses ABI 2.2 single-owner CoC, while its ABI 2.1 GATT route remains compatible. A real Mac CoC transfer and physical completion receipt were recorded on 2026-10-27. The older host-specific image path remains compatibility code. Keep framework entry documentation about generic services and app management; business input/sending commands belong to app/client guides.
+## Wi-Fi
+
+SD `config/wifi.json` is authoritative when present, NVS is the fallback, and the first boot with a card migrates NVS or `wifi.txt` to SD. Writes use `.tmp` then `.bak` publication. Apps never receive credentials. See `docs/wifi-config.md`.

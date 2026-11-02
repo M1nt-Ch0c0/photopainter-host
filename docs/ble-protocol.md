@@ -1,386 +1,359 @@
-# PhotoPainter BLE framing and application commands
+# 宿主蓝牙线上协议
 
-**Current authentication is physical pairing v2.** Read
-[ble-pairing-v2.md](ble-pairing-v2.md) for commit/reveal, button confirmation,
-persistent ownership and BondAuth (op 23). The old fixed-token op 1 handshake
-below is historical and is rejected by current firmware. Signed operations
-2..17 and CoC continue using the framing/domains in this reference after the new
-BondAuth session key has been established.
+这一页是宿主固件蓝牙管理协议的字节级规格：广播内容、管理服务的特征、分片写入、签名请求的格式、错误码、全部管理命令和状态 JSON。写客户端、改 `main/ble_protocol.c` 或排查线上数据时查这一页。
 
-**尚未实机验证 / not hardware-validated:** this reference describes current
-source and offline checks. Historical BLE captures below do not prove that the
-new physical-button ceremony has run on a device.
+协议的整体设计（为什么这样鉴权、图片事务怎样避免重复刷屏、三种应用通信方式怎么选）见 [蓝牙通信](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/06-bluetooth.md)。配对和重连鉴权（op 18–23）在 [配对 v2](ble-pairing-v2.md)，通用消息通道（op 24–27）在 [ABI 2.3 消息通道](abi-2-3-channel.md)，CoC 通道在 [ABI 2.2 CoC](abi-2-2-coc.md)。
 
-BLE belongs to the resident host. It is available without working Wi-Fi, valid SD
-Wi-Fi JSON, or a running application. It never updates the host firmware or the
-partition table. Applications are still trusted native ELF code, not a sandbox.
+## 约定
 
-This is the resident framework's wire reference. New application business
-protocols belong to the application. The photoframe-owned receive
-route is implemented in the sibling application; existing host image opcodes remain compatibility features
-and are not being extended. See the [developer Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/README.md).
+- 所有多字节整数都是小端序。
+- HMAC 指 HMAC-SHA256，标签是完整的 32 字节，宿主用常数时间比较。
+- 域名字符串（例如 `pp-ble-v1/request`）按 ASCII 直接拼在数据前面，不带结尾的 NUL。
+- 应用 ID 在线上统一编码为 32 字节：1–31 个小写字母、数字、`_` 或 `-`，后面用 NUL 补齐。
 
-## Discovery
+实现位置：
 
-The peripheral advertises every 200–300 ms with flags `0x06` and the complete
-128-bit service UUID `7b9d0001-6c82-4f31-9a48-6f5061696e74`. The scan response
-contains manufacturer data (experimental company ID `0xffff`, little endian)
-followed by this 20-byte record. Current advertisement data carries the name
-`PP-XXXX` (last four stable-ID hexadecimal digits); legacy devices used `PPBLE`:
-
-| Offset | Bytes | Meaning |
-|---|---:|---|
-| 0 | 1 | Protocol version, 2 (legacy token firmware: 1) |
-| 1 | 1 | 0 offline, 1 connecting, 2 IPv4 ready, 3 invalid Wi-Fi configuration |
-| 2 | 6 | Stable device ID: factory Wi-Fi station MAC, displayed as 12 hex digits |
-| 8 | 4 | IPv4 in network byte order; zero unless state is 2 |
-| 12 | 8 | First 8 bytes of SHA-256 of SSID bytes; zero while offline/config-invalid |
-
-The same record is readable through GATT. Wi-Fi connection attempts, disconnects
-and IP changes update the record immediately and schedule an advertising update
-on the NimBLE task. During a connection, the GATT record updates immediately;
-advertising resumes with the latest record on disconnect. No SSID plaintext,
-password, token, authentication proof, or remote service credential is advertised.
-`0xffff` is a development identifier, not an assigned Bluetooth SIG company ID;
-clients check this protocol's service/record and authenticate before trusting it.
-
-SSID hashing avoids announcing its literal name. It does **not** hide common
-SSID names from dictionary guessing. The stable ID also permits nearby tracking.
-These are deliberate local discovery tradeoffs. The hash is only diagnostic;
-it must not be used to identify or authenticate the device.
-
-## GATT
-
-One peripheral connection is supported; no central, observer, or standalone
-broadcaster role is enabled. UUIDs below share suffix
-`-6c82-4f31-9a48-6f5061696e74`.
-
-| UUID prefix | Characteristic | Access |
-|---|---|---|
-| `7b9d0002` | Discovery | Read the 20-byte record; public |
-| `7b9d0003` | Challenge | Read a fresh 32-byte device nonce for this connection |
-| `7b9d0004` | Request | Write with response; bounded application framing below |
-| `7b9d0005` | Response | Read a complete response, up to 512 bytes; ATT long reads supported |
-
-Only discovery and the pairing/authentication bootstrap operations described in
-the v2 contract are available before authentication.
-The response characteristic returns a single zero byte while a request is pending.
-This is not an authenticated acknowledgement or success. Poll with a delay
-(the Go client uses 25 ms). Response bytes remain fixed until the next complete
-request. No notification subscription is required for installation progress.
-
-All multibyte integers below are little endian. Each GATT write has a 4-byte
-prefix: `uint16 offset, uint16 total_frame_size`, then at least one frame byte.
-The total frame is at most 512 bytes. Fragment size is at most `ATT_MTU - 3`;
-even the minimum MTU 23 works, leaving 16 frame bytes per write. Identical
-duplicate fragments are accepted. Holes, conflicting overlaps, invalid sizes,
-and writes while a request is executing receive an ATT error. Only one request
-can be outstanding; responses must be consumed before sending the next request.
-
-## Historical v1 authentication and threat model
-
-This fixed-token handshake is retained to explain older captures, not as an
-accepted migration/fallback path. Pairing v2 rejects op 1 even while unbound.
-
-There is no pairing, bonding, or link encryption. Authentication uses the existing
-32–128 byte device push token as an HMAC-SHA256 key. The token never crosses BLE.
-Use a randomly generated token: a captured exchange allows offline guessing of
-a weak human-chosen token. The protocol provides authentication, integrity, and
-replay protection, **not confidentiality** for images, packages or status information.
-Passive observers can see them. Radio denial of service, disconnects and live
-relaying are outside this protection. Native installed code is trusted.
-
-Let `D` be the six device ID bytes, `S` the 32-byte random server nonce and `C`
-an independently generated 32-byte client nonce. Concatenation is bytewise;
-domain strings are ASCII without a trailing NUL:
-
-1. Read discovery and check the selected ID. Read `S` from Challenge.
-2. Send `01 || C || HMAC(token, "pp-ble-v1/client" || D || S || C)` (65 bytes).
-3. Derive `K = HMAC(token, "pp-ble-v1/session" || D || S || C)` on both ends.
-4. The host returns an ordinary signed response with op=1, seq=0, code=0 and
-   the current discovery record. The client verifies it before trusting the IP.
-
-The server nonce permits one authentication attempt per connection, including
-malformed attempts. Reconnect for a new nonce after failure. Both directional
-tags and the session key have different domains. Nonces come from ESP hardware
-randomness after radio initialization and the computer's cryptographic RNG.
-
-## Signed command envelope (current v2 and historical v1)
-
-After BondAuth in v2 (or the historical handshake in v1), every command is:
-
-`op:u8 || sequence:u32 || payload || HMAC(K, "pp-ble-v1/request" || preceding_bytes)`
-
-Sequence starts at 1, must increase by exactly one, and cannot wrap. Every
-authenticated response, including application errors, is:
-
-`op:u8 || sequence:u32 || code:u16 || payload || HMAC(K, "pp-ble-v1/response" || preceding_bytes)`
-
-Tags are full 32-byte SHA-256 HMACs and use constant-time equality checks.
-Malformed/unauthenticated/expired requests may receive an unsigned 7-byte error.
-Unsigned responses must never be accepted as success or evidence of identity.
-A MAC/sequence/transport failure ends the client session. Do not retry an old
-signed command on a fresh connection. Query state after an ambiguous activation.
-
-Sessions expire after 60 seconds without a valid command, or two hours total.
-The total cap accommodates a 1 MiB package at minimum MTU with acknowledged writes;
-it is not a throughput guarantee. The computer's install deadline is 90 minutes.
-An in-flight App Manager operation retains its data and finishes before cleanup;
-the idle timer resumes after the operation. Disconnect discards authentication
-and the partially received package. Reconnection supports **whole-package
-retransmission**, not persisted cross-connection resume. This keeps the shared
-installer unchanged and avoids extra Flash wear on partial transfers.
-
-Expiry noticed while handling a request also closes the physical connection.
-The closed indication remains set until a new session opens; the radio task
-checks the connection epoch before termination so a recycled handle cannot close
-a newer peer. Application authentication is revoked when closure is scheduled.
-
-## Commands and errors
-
-An application ID is 32 bytes: 1–31 lowercase ASCII letters, digits, `_` or `-`,
-then NUL padding. Package bytes are exactly `tools/module.py package` output.
-
-| Op | Command | Request payload | Successful response payload |
-|---:|---|---|---|
-| 1 | Historical token Authenticate | Rejected in v2 | Unsigned rejection, never a session |
-| 2 | Discovery, authenticated | Empty | Discovery record |
-| 3 | Status / application list | `offset:u32` | `total:u32, offset:u32, JSON page` (up to 400 bytes) |
-| 4 | Begin | `package_size:u32, full_package_sha256:32, app_id:32` | Received offset `u32` |
-| 5 | Chunk | `offset:u32, data` | Received offset `u32` |
-| 6 | Commit current transfer | Empty | Empty; package stages only, image waits for physical completion |
-| 7 | Abort receive | Empty | Empty |
-| 8 | Upload progress | Empty | `received:u32, total:u32` |
-| 9 | Activate pending | `app_id:32` | Empty |
-| 10 | Switch to confirmed active | `app_id:32` | Empty |
-| 11 | Roll back | `app_id:32` | Empty |
-| 12 | Remove | `app_id:32` | Empty |
-| 13 | Application characteristic read (ABI 2.1) | `generation:u32, service_revision:u32, index:u32` | Value, at most 128 bytes |
-| 14 | Application characteristic write (ABI 2.1) | Same 12-byte target, then value (0–128 bytes) | Empty, after application event completion |
-| 28 | Read-only shell (additive, see below) | `offset:u32`, then command bytes only when offset is 0 | `total:u32, offset:u32, exit:u8, flags:u8, output page` (up to 400 bytes) |
-
-Authenticated status includes live `uptime_ms` and the pinned IDF's numeric
-`reset_reason`, sampled with heap counters. Useful reasons are 1 power-on,
-3 software restart, 4 panic, 5 interrupt watchdog, 6 task watchdog, 9 brownout,
-11 USB peripheral reset, 14 power glitch and 15 CPU lockup. These read-only fields
-distinguish a radio disconnect from a device reboot without opening serial or
-changing NVS. They are diagnostic metadata, not a new installation state.
-
-Status offset zero freezes the existing App Manager JSON snapshot in this
-session. Subsequent pages refer to that same snapshot. It contains the same
-application catalog, selected/trial/loaded app, ready/confirmed flags and memory
-fields as the historical HTTP status envelope. Repeating Begin with identical metadata returns the current
-offset. Duplicate package chunks must match the buffered bytes exactly.
-Package size is 4148 through 1048576 bytes. The whole-package SHA is additional
-transport protection; the existing installer also checks payload SHA, ELF,
-manifest/imports, ABI and package identity before accepting a candidate.
-
-| Code | Meaning |
-|---:|---|
-| 0 | Success |
-| 1 | Unauthorized, invalid MAC/sequence, or invalid authentication attempt |
-| 2 | No v2 binding (historical v1: token unconfigured/invalid) |
-| 3 | Shared admission busy (button, timer/network event or another upload) |
-| 4 | Invalid request, size, ID or unsupported opcode |
-| 5 | Unexpected offset, gap or conflicting duplicate |
-| 6 | Full-transfer SHA-256 mismatch |
-| 7 | Memory unavailable |
-| 8 | Invalid catalog/transfer state or missing application |
-| 9 | Package rejected by the existing installer |
-| 10 | Storage/application operation failure |
-| 11 | Session expired |
-| 12 | PNG rejected before display I/O |
-| 13 | Physical display failure |
-| 14 | Image request belongs to another device boot |
-
-Package Begin acquires the same admission semaphore as the function key and application work before
-allocating up to 1 MiB in PSRAM. It holds admission through commit/abort/timeout/
-disconnect. Commit enters the authorized manager stage path and releases input
-only after it returns. Explicit activate/switch/rollback/
-remove use the same manager worker and catalog transitions. No BLE callback
-loads ELF, writes a slot, invokes app code or touches the display. Long work never
-blocks the NimBLE task. Connection generations prevent old completions being
-published to a newly connected peer. Reset also closes admission and drains the
-old transport before clearing the owner; queued work rechecks its authorization
-epoch before side effects. v2 HTTP control returns 410. Successful staging never
-activates an app.
-
-## Read-only shell (op 28, additive)
-
-**尚未实机验证 / not hardware-validated.** A signed diagnostic command channel
-for the authenticated owner. It never mutates state, reboots, or prints tokens,
-bond keys, Wi-Fi passwords or management keys.
-
-- `offset=0`: the rest of the payload is the command, 1–256 bytes of well-formed
-  UTF-8 with no NUL or control characters except space/tab. The host splits it
-  into at most 16 whitespace-separated arguments, executes it **once**, captures
-  at most 4095 bytes of text output in this session and returns page 0. Longer
-  output is cut and `flags` bit 0 (truncated) is set.
-- `offset>0`: the command must be empty. Returns the page at `offset` from the
-  most recent capture in this session; it never re-executes. A new connection or
-  session starts with no capture.
-- `exit`: 0 success, 1 command error, 2 usage error (empty command, too many or
-  unexpected arguments), 127 unknown command. A non-zero exit is still a
-  response code 0 with output.
-- `total` may be 0; the reply is then only the 10-byte header.
-- Errors: payload shorter than 4 bytes, invalid command bytes, or command bytes
-  with `offset>0` → 4; `offset>=total` or `offset>0` without a prior capture → 5;
-  firmware without a wired shell → 8. Older firmware answers op 28 with 4
-  (unsupported opcode), which clients use for feature detection.
-
-| Command | Output |
+| 文件 | 内容 |
 |---|---|
-| `help` | Command list |
-| `uname`, `version` | Host project/version/build time, supported payload ABI, ESP-IDF, chip revision and cores |
-| `uptime` | Time since boot and numeric reset reason |
-| `free` | Internal heap total/free/min-free/largest block; the same for PSRAM when present |
-| `apps` | Bank, ID, active-slot version, slot, ABI and foreground/selected/trial/pending markers |
-| `ps`, `current` | Foreground application, slot/version, ABI, manager phase, ready/confirmed flags, generation, last switch |
-| `status` | The op 3 STATUS JSON |
-| `wifi` | Discovery-record station state and IPv4 only; no SSID or password |
+| `main/ble_protocol.c`、`main/ble_protocol.h` | 分片重组、签名请求、op 2–17 和 op 24–28 的分发。纯 C，不依赖 RTOS 和无线栈 |
+| `main/ble_transport.c` | NimBLE 适配：广播、GATT 特征、传输工作线程、应用 GATT 服务的发布 |
+| `main/pairing.c`、`main/app_pairing.c` | 配对 v2 和 BondAuth（op 18–23） |
+| `main/ble_shell.c`、`main/host_shell.c` | 只读诊断命令（op 28） |
+| `main/app_manager.c` | 状态 JSON、管理命令和应用请求的串行执行 |
 
-Commands run on the BLE transport worker, read only the App Manager's published
-status snapshot and heap/system counters, take no admission, and perform no
-Flash, catalog, application or display I/O, so they also answer during an upload.
+## 广播与发现记录
 
-## Memory and build
+相框只做外设，同一时间只接受一个连接，广播间隔 200–300 毫秒。
 
-`sdkconfig.defaults` enables NimBLE peripheral only, one connection, MTU 247,
-12 blocks in each mbuf pool, external PSRAM host allocation, and Wi-Fi/BLE software
-coexistence. Controller/DMA/task stacks retain the internal memory required by
-ESP-IDF. PSRAM allocation failure is reported; it does not fall back to using a
-megabytes of internal RAM. Package and BLE PNG receive buffers cannot coexist
-because they share admission. Pairing v2 is application-layer authentication,
-not operating-system SMP bonding or link encryption; images remain observable
-on the radio. There is no fixed-token or unauthenticated control fallback.
+- **广播数据**：标志 `0x06`；完整的 128 位服务 UUID `7b9d0001-6c82-4f31-9a48-6f5061696e74`；完整设备名 `PP-XXXX`。`XXXX` 是设备 ID 最后两个字节的大写十六进制，例如设备 ID `001122334455` 的设备名是 `PP-4455`。
+- **扫描响应**：厂商数据，公司 ID `0xffff`（开发用标识，不是蓝牙联盟分配的），后面跟 20 字节发现记录。
 
-Use the pinned IDF commit `5e6f53cdb31fe5708eae3f55af9737be2822db22` and
-Registry elf_loader **1.3.3**. Existing ignored `sdkconfig` files do not receive
-new defaults automatically. Build into a fresh directory/config, for example:
+发现记录：
 
-```sh
-idf.py -B build-ble -DSDKCONFIG=build-ble/sdkconfig build
-idf.py -B build-ble size
-python3 -m unittest discover -s tools -p 'test_*.py'
+| 偏移 | 字节 | 内容 |
+|---:|---:|---|
+| 0 | 1 | 协议版本，固定为 `2` |
+| 1 | 1 | Wi-Fi 状态：0 离线、1 连接中、2 已获得 IPv4、3 Wi-Fi 配置无效 |
+| 2 | 6 | 设备 ID：出厂 Wi-Fi 站点 MAC |
+| 8 | 4 | IPv4 地址（网络字节序），只有状态为 2 时非零 |
+| 12 | 8 | SSID 的 SHA-256 前 8 字节，状态为 1 或 2 时非零 |
+
+Wi-Fi 状态或 IP 变化时，记录立即更新。连接期间广播暂停，断开后用最新记录重新广播。记录没有签名，客户端只用它选设备；BondAuth 成功后，签名回复里会再带一份记录供核对。
+
+## 管理服务的特征
+
+服务 UUID 是 `7b9d0001-6c82-4f31-9a48-6f5061696e74`，下表特征 UUID 都以 `-6c82-4f31-9a48-6f5061696e74` 结尾。
+
+| UUID 前缀 | 名称 | 属性 | 内容 |
+|---|---|---|---|
+| `7b9d0002` | Discovery | 读 | 20 字节发现记录，无需鉴权 |
+| `7b9d0003` | Challenge | 读 | 本次连接的 32 字节随机数，每次连接重新生成 |
+| `7b9d0004` | Request | 写、无应答写 | 分片写入请求帧 |
+| `7b9d0005` | Response | 读（支持长读） | 最近一次请求的完整回复，最多 512 字节 |
+| `7b9d0006` | Write capacity | 读 | 3 字节：`version:u8=1, write_capacity:u16` |
+| `7b9d0007` | Message limits | 读 | 6 字节：`version:u8=1, request_max:u16=4096, response_max:u16=512, flags:u8=1` |
+
+- `write_capacity` 是本连接一次 ATT 写入能带的字节数（含 4 字节分片头），等于 `min(512, ATT_MTU - 3)`。MTU 247 时为 244，最小 MTU 23 时为 20。客户端每次连接都应先读它。
+- `7b9d0007` 的 `flags` 第 0 位为 1，表示 Request 特征支持无应答写（Write Command）。
+
+## 分片写入
+
+一个请求帧（逻辑帧）通过一次或多次写 `7b9d0004` 送达。每次写入的格式：
+
+```
+offset:u16 | total:u16 | 帧数据（至少 1 字节）
 ```
 
-The partition table must remain byte-identical. After separate hardware
-authorization and verified backups, a framework update writes **only** the
-new host `.bin` at `0x10000`. Do not execute `idf.py flash` for this update.
+| 规则 | 说明 |
+|---|---|
+| 单次写入长度 | 5 到 `write_capacity` 字节 |
+| 帧长度 `total` | 普通命令最多 512 字节；op 26 最多 4096 字节（`PP_BLE_FRAME_MAX`） |
+| 顺序 | `offset` 必须等于已收到的长度。`offset=0` 且 `total` 与当前帧不同时，重新开始一帧 |
+| 重复分片 | 与已收内容完全相同的重复分片会被接受 |
+| 错误 | 空洞、内容冲突的重叠、越界或长度不对时，这次写入得到 ATT 错误，已收到的部分作废 |
+| 处理中 | 上一帧还在处理时写入，得到 ATT 错误 |
 
-Protocol vectors/tests: `tests/ble/test_protocol.c`, `tests/ble/test_shell.c`, `tools/test_ble_protocol.py`,
-and the computer repository's `internal/ble/protocol_test.go`. The C tests run
-the production protocol with OpenSSL crypto and ASan/UBSan; firmware uses IDF
-PSA HMAC/SHA. The catalog/runtime recovery tests remain authoritative for A/B.
+收齐最后一字节后，宿主把整帧交给传输工作线程处理。
 
-Reference APIs: [ESP-IDF NimBLE](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/bluetooth/nimble/index.html),
-[Go Bluetooth](https://github.com/tinygo-org/bluetooth), and
-[Windows Runtime thread cleanup](https://learn.microsoft.com/en-us/windows/win32/api/roapi/nf-roapi-rouninitialize).
+## 读取回复
 
-## Images without Wi-Fi (v1 additive extension)
+写完最后一个分片后，客户端反复读 `7b9d0005`：
 
-**Compatibility implementation, host b4709c0.** This section records the already
-tested host-owned PNG route. New image reception is implemented in the
-[photoframe ABI 2.1 service](https://github.com/M1nt-Ch0c0/photoframe/blob/main/docs/ble-image-input.md),
-with host authentication and display kept generic.
+- 读到**单个 `0x00` 字节**：请求还在处理，稍后再读（命令行客户端间隔 25 毫秒）。这个字节只表示“还没好”。
+- 读到更长的内容：这就是完整回复。它在下一个请求完成前保持不变。
 
-Discovery version and service UUIDs remain unchanged. Authenticate first and send
-`IMAGE_CAPS`; an older host returns code 4, so clients fail explicitly instead of
-falling back to an IP request. The existing `BEGIN`/`COMMIT` application installer
-is unchanged. PNG images use `IMAGE_BEGIN`, then the same `CHUNK`, `PROGRESS`,
-`ABORT` and `COMMIT` framing. Only one package or image buffer can hold manager
-admission. PNG size is 8 bytes through 5 MiB; complete decoding still enforces
-800×480, opaque exact six-color, non-interlaced PNG before any panel I/O.
+同一时间只能有一个请求在途，读到回复后才能发下一个。
 
-| Opcode | Request payload | Successful response payload |
-|---|---|---|
-| 15 `IMAGE_CAPS` | Empty | `minor:u8=1`, `boot_id:16`, `max_png:u32`, `receipt_capacity:u8=4` |
-| 16 `IMAGE_BEGIN` | `boot_id:16`, `request_id:16`, `size:u32`, `sha256:32`, `app_id:32` | `received:u32`, `state:u8`, `result:u16` |
-| 17 `IMAGE_RESULT` | `boot_id:16`, `request_id:16` | `state:u8`, `result:u16`, `size:u32`, `sha256:32`, `app_id:32` |
+## 签名请求与回复
 
-Integers are little endian; app IDs use the existing zero-padded encoding. Request
-IDs are fresh nonzero random 128-bit values per image intent. State 0 means no
-completion record (or receiving in the BEGIN reply), 1 means executing, and 2
-means finished; **only state 2 with result 0 proves display completion**. An
-unknown RESULT has zeroed remaining fields. New result/error codes are 12 invalid
-PNG, 13 physical display failure, and 14 changed device boot. A mismatched reuse of
-an existing request ID is rejected with code 8.
+BondAuth（op 23，见 [配对 v2](ble-pairing-v2.md)）成功后得到 32 字节会话密钥 `K`。之后每条命令都用 `K` 签名：
 
-The host checks the running target and PNG capability with admission held. The
-buffer stays in PSRAM through the existing synchronous `app_manager_render()`;
-this is the same path used by HTTP, including ABI 1/2 validation and confirmation.
-COMMIT's signed success is returned only after physical refresh and final
-POWER_OFF. During that call the BLE radio task continues responding to ATT, but
-the transport worker returns the pending marker while waiting for the manager;
-a new connection may have to wait until this job finishes to authenticate.
-Disconnect does not cancel a live render or free its borrowed bytes.
+```
+请求：op:u8 | sequence:u32 | payload | HMAC(K, "pp-ble-v1/request"  || 前面所有字节)
+回复：op:u8 | sequence:u32 | code:u16 | payload | HMAC(K, "pp-ble-v1/response" || 前面所有字节)
+```
 
-Before rendering, the host records the request ID, content digest, target and
-size; afterward it records the result. Four recent receipts survive connection
-loss until eviction or reboot. Repeating a matching completed BEGIN returns its
-stored outcome without allocation or another render. A fresh random boot ID
-distinguishes resets. A client that has attempted COMMIT must only query its
-receipt: never infer that an unknown/evicted receipt means no draw occurred.
-Changed boot, missing receipt or mismatched metadata stops automatic repetition
-of that image. These receipts are RAM state, not a durable exactly-once ledger;
-the PC sender also retains its pending identity only for its process lifetime.
+| 规则 | 说明 |
+|---|---|
+| 序号 | 从 1 开始，每条加 1，不能回绕。回复带回同一序号 |
+| 请求上限 | 普通命令帧最多 512 字节，负载最多 475 字节；op 26 帧最多 4096 字节 |
+| 回复上限 | 512 字节 |
+| 未签名回复 | 7 字节（`op, sequence, code`），出现在格式错误、未鉴权、签名或序号不对、会话过期等情况。未签名回复不能当作成功或身份证明 |
+| 签名校验失败 | 客户端应结束会话并断开。新连接上不能重发旧的签名命令；操作结果不确定时先读状态 |
 
-Pre-COMMIT connection loss can restart the whole image. Post-COMMIT loss must
-recover the existing result. All commands/results retain the same nonce/HMAC/
-sequence protections. PNG content, like existing package content, is not
-encrypted by this protocol; the token itself is never transmitted.
+会话有效期：
 
-## Application BLE service (ABI 2.1)
+- 60 秒内没有有效命令，会话过期；
+- 从鉴权开始最多 2 小时；
+- 宿主正在执行的长操作（例如刷屏）期间不计空闲时间，操作结束后重新计时；
+- 会话过期时宿主主动断开连接；
+- 断开连接会丢弃鉴权状态和已经收到一半的安装包或图片。重连后要从头重传，宿主不做跨连接续传。
 
-The optional application surface is included in this implementation. It adds
-three allowlisted imports: `app_host_ble_register_v2`, `app_host_ble_set_v2`,
-`app_host_ble_unregister_v2`. `APP_MANIFEST_BLE` declares minor version 1.
-The ordinary `APP_MANIFEST` macro still declares minor 0. Both validators reject
-BLE imports in a minor-0 package and reject unknown minor versions. The original
-context/result/manifest layouts remain 44/20/128 bytes on ELF32; each application's
-context reports its declared minor version. ABI 1 and ABI 2.0 still work.
+## 错误码
 
-An active app may register one custom 128-bit service with up to four custom
-characteristics. Each value is bounded to 128 bytes; properties are READ, WRITE,
-and optional NOTIFY (which also requires READ). UUID arrays in the SDK are in
-printed byte order. The host reserves the `7b9d` namespace and Bluetooth SIG
-base UUID namespace, rejects duplicate UUIDs and copies the entire descriptor
-and values into host RAM. No application pointer or callback is retained.
+回复里的 `code`：
 
-Register returns after validation/copy. Publication occurs on the NimBLE task,
-including when the app START precedes BLE startup. `APP_BLE_ERROR` reports a
-publication failure through the manager. Dynamic GATT services use NimBLE's
-add/delete service API; built-in discovery/upload services are never removed.
-The host reports Service Changed when the dynamic database changes. On STOP or
-any unload/failure, app state and queued events are invalidated **before ELF
-deallocation**; NimBLE removes the old service on its task. During that short
-handoff, stale accesses already fail the revision check. RAM contains host copies
-only, so neither old callbacks nor old BLE data can enter the next ELF.
+| 代码 | 常量 | 含义 |
+|---:|---|---|
+| 0 | `PP_BLE_OK` | 成功 |
+| 1 | `PP_BLE_UNAUTHORIZED` | 签名、序号或鉴权尝试无效 |
+| 2 | `PP_BLE_UNCONFIGURED` | 没有配对关系 |
+| 3 | `PP_BLE_BUSY` | 准入锁被占用（按键、定时器或网络事件、另一个上传），稍后重试 |
+| 4 | `PP_BLE_INVALID` | 长度、ID 或 op 不合法，或 op 不支持 |
+| 5 | `PP_BLE_OFFSET` | 偏移不对：空洞、内容冲突的重复数据，或分页偏移越界 |
+| 6 | `PP_BLE_HASH` | 整包 SHA-256 不匹配 |
+| 7 | `PP_BLE_MEMORY` | 内存不足 |
+| 8 | `PP_BLE_STATE` | 目录或传输状态不允许这个操作，或应用不存在 |
+| 9 | `PP_BLE_PACKAGE` | 安装器拒绝了这个包 |
+| 10 | `PP_BLE_STORAGE` | 存储或应用操作失败 |
+| 11 | `PP_BLE_EXPIRED` | 会话过期 |
+| 12 | `PP_BLE_IMAGE_INVALID` | PNG 无效，在接触屏幕前被拒绝 |
+| 13 | `PP_BLE_DISPLAY_FAILED` | 物理显示失败 |
+| 14 | `PP_BLE_BOOT_CHANGED` | 图片请求属于相框的上一次开机 |
 
-`APP_EVENT_BLE` (6) carries a 140-byte `app_ble_event_v2_t` through the existing
-borrowed context data pointer. Event types are authenticated CONNECTED,
-DISCONNECTED, WRITTEN and ERROR. Anonymous connections produce no app events.
-Connection boundaries coalesce undelivered events and discard the disconnected
-peer's queued writes. At most eight events are buffered. The manager delivers
-them only with shared admission held. A successful signed write waits for the
-application's event result; a disconnect does not cancel an already executing
-application event. The normal watchdog/display budgets still apply.
+## 命令总表
 
-Read status to obtain `generation`, `ble_service_revision`,
-`ble_characteristics` and `ble_service_uuid`. Ops 13/14 must name that generation,
-revision and index; a switch or unregister/register invalidates the target.
-Both commands require the same HMAC session and shared admission as management.
-The computer CLI also checks the requested application ID matches `loaded_app`.
+| op | 命令 | 说明 |
+|---:|---|---|
+| 1 | 旧固定令牌鉴权 | 总是返回未签名的错误 1 |
+| 2 | Discovery（签名版） | 见下文 |
+| 3 | 状态 | 分页读取状态 JSON |
+| 4–8 | 上传应用包 | 开始、数据块、提交、放弃、进度 |
+| 9–12 | 应用管理 | 激活、切换、回滚、删除 |
+| 13–14 | 应用 GATT 特征读写 | ABI 2.1 |
+| 15–17 | 宿主图片命令 | 兼容路径 |
+| 18–23 | 配对与 BondAuth | 见 [配对 v2](ble-pairing-v2.md) |
+| 24–27 | 通用消息通道 | 见 [ABI 2.3 消息通道](abi-2-3-channel.md) |
+| 28 | 只读诊断命令 | 见下文 |
 
-A custom characteristic's direct GATT WRITE accepts the identical fragmented
-signed op-14 frame as Request; its index must match that characteristic. The
-response still comes from the permanent Response characteristic. Direct GATT
-READ requires an authenticated session and returns the current value. NOTIFY
-also requires authentication and sends at most `MTU-3` bytes. These direct reads
-and notifications are unencrypted, advisory values without protocol HMAC tags;
-use **op 13**, as the provided CLI does, for an authenticated complete read.
-Subscribe/read permissions never grant upload/activation permission on their own.
+op 2–17 和 op 24–28 都要求已鉴权，按上一节的签名格式收发。下面各表只列 `payload` 部分。
 
-The minimal `photoframe/examples/ble-echo` app demonstrates START registration,
-an authenticated write event, copied read/notify values and STOP cleanup. It has
-no display requirement and does not draw on the panel.
+### op 2：Discovery
+
+| 请求 | 成功回复 |
+|---|---|
+| 空 | 20 字节发现记录 |
+
+### op 3：状态
+
+| 请求 | 成功回复 |
+|---|---|
+| `offset:u32` | `total:u32, offset:u32, JSON 片段`（最多 400 字节） |
+
+`offset=0` 时宿主取一份当前状态的快照，后续页都读这份快照，分页期间状态变化不会让内容错位。客户端从 0 开始，每次用已拼好的长度作为下一页的 `offset`，直到拼满 `total` 字节。`offset` 大于等于 `total` 时返回 5。字段含义见 [状态 JSON](#状态-json)。
+
+### op 4–8：上传应用包
+
+| op | 命令 | 请求 | 成功回复 |
+|---:|---|---|---|
+| 4 | BEGIN | `size:u32, sha256:32, app_id:32` | 已收到的偏移 `u32` |
+| 5 | CHUNK | `offset:u32, data`（至少 1 字节） | 已收到的偏移 `u32` |
+| 6 | COMMIT | 空 | 空 |
+| 7 | ABORT | 空 | 空 |
+| 8 | PROGRESS | 空 | `received:u32, total:u32` |
+
+1. **BEGIN**：`size` 是整包长度，4148（4096 字节包头加最小 52 字节 ELF）到 1048576 字节；`sha256` 是整包的 SHA-256。宿主取得准入锁，在 PSRAM 里分配整包缓冲，拿不到准入锁返回 3。已有上传时，参数完全相同的 BEGIN 返回当前偏移，参数不同返回 8。
+2. **CHUNK**：`offset` 不能超过已收到的长度。落在已收范围内、内容一致的重复块被接受；内容不一致或有空洞返回 5。
+3. **COMMIT**：要求已收齐，否则返回 8。宿主先核对整包 SHA-256（不符返回 6），再交给安装器检查包头、载荷 SHA-256、ELF、清单、导入表和应用 ID（拒绝返回 9），然后写进该应用的备用槽，成为 `pending`。提交只暂存，不激活。
+4. **ABORT**：丢弃缓冲，释放准入锁。
+
+上传期间一直占着准入锁，按键和其他管理命令会得到 3。COMMIT、ABORT、断开连接和会话过期都会释放缓冲和准入锁。包格式和写槽顺序见 [应用目录与槽位](app-catalog.md)。
+
+### op 9–12：应用管理
+
+| op | 命令 | 请求 | 成功回复 |
+|---:|---|---|---|
+| 9 | ACTIVATE | `app_id:32` | 空 |
+| 10 | SWITCH | `app_id:32` | 空 |
+| 11 | ROLLBACK | `app_id:32` | 空 |
+| 12 | REMOVE | `app_id:32` | 空 |
+
+宿主取得准入锁后把命令交给 App Manager，执行完才回复。同一会话里还有上传在进行时返回 3。宿主内部错误映射为：状态不允许或应用不存在 → 8，内存不足 → 7，参数无效 → 4，其他失败 → 10。各命令对目录的影响见 [应用目录与槽位](app-catalog.md#管理命令)。
+
+### op 13–14：应用 GATT 特征
+
+前台应用用 ABI 2.1 注册了自定义 GATT 服务时，客户端用这两个命令做带签名的读写。
+
+| op | 命令 | 请求 | 成功回复 |
+|---:|---|---|---|
+| 13 | APP_READ | `generation:u32, revision:u32, index:u32` | 特征当前值，最多 128 字节 |
+| 14 | APP_WRITE | 同样 12 字节定位，后跟 0–128 字节值 | 空 |
+
+- `generation`、`revision` 取自状态里的 `generation` 和 `ble_service_revision`，`index` 是特征下标 0–3。应用重新加载或重新注册服务后，旧的定位失效。
+- APP_WRITE 在应用处理完对应的 BLE 写入事件后才回复。
+- 两个命令都要取得准入锁。
+- 应用自定义特征也可以直接写：写入内容必须是同样分片格式的签名 op 14 帧，并且 `index` 等于这个特征的下标；回复仍从 `7b9d0005` 读。
+- 直接 GATT 读和通知要求连接已鉴权，但值本身不带签名。需要可信的完整值时用 op 13。通知长度不超过 `ATT_MTU - 3`。
+
+### op 15–17：宿主图片命令
+
+这是宿主自带的一条 PNG 显示路径，复用 op 5–8 传数据，最后由 op 6 触发显示。宿主把 PNG 作为 INPUT 事件交给前台应用，要求应用是 ABI 1，或在清单里声明了 `APP_INPUT_PNG`。现有客户端都通过 photoframe 自己的图片事务推图（见 [蓝牙通信](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/06-bluetooth.md#7-图片事务)），这条路径只为兼容保留。
+
+| op | 命令 | 请求 | 成功回复 |
+|---:|---|---|---|
+| 15 | IMAGE_CAPS | 空 | `minor:u8=1, boot_id:16, max_png:u32, receipt_capacity:u8=4` |
+| 16 | IMAGE_BEGIN | `boot_id:16, request_id:16, size:u32, sha256:32, app_id:32` | `received:u32, state:u8, result:u16` |
+| 17 | IMAGE_RESULT | `boot_id:16, request_id:16` | `state:u8, result:u16, size:u32, sha256:32, app_id:32` |
+
+- `boot_id` 是每次开机随机生成的 16 字节。请求里的 `boot_id` 与当前不符时返回 14。
+- `request_id` 是非零的随机 128 位值，每次推图意图一个。
+- PNG 长度 8 字节到 5 MiB。目标应用不是当前前台应用、或不接收 PNG 时返回 8。
+- `state`：0 没有记录（在 BEGIN 回复里表示接收中）、1 正在执行、2 已完成。只有 `state=2` 且 `result=0` 证明显示完成。查不到的 ID 在 IMAGE_RESULT 里返回全零。
+- op 6 提交图片时，宿主先记下请求 ID、摘要、长度和目标应用，再同步调用显示，屏幕刷新完成并断电后才回复。
+- 宿主在内存里保留最近 4 份回执，重启后清空。用已有回执的请求 ID 重发相同参数的 IMAGE_BEGIN，直接返回已有结果，不会再刷一次；参数不同返回 8。
+
+### op 28：只读诊断命令
+
+已鉴权的主人可以执行一组只读命令查看宿主状态。命令不修改任何状态、不重启设备，输出里不含会话密钥、配对根密钥和 Wi-Fi 密码。
+
+| 请求 | 成功回复 |
+|---|---|
+| `offset:u32`，`offset=0` 时后跟命令文本 | `total:u32, offset:u32, exit:u8, flags:u8, 输出片段`（最多 400 字节） |
+
+- `offset=0`：命令文本 1–256 字节，必须是合法 UTF-8，除空格和制表符外不含控制字符。宿主按空白拆成最多 16 个参数，**执行一次**，保留最多 4095 字节输出，并返回第一页。输出被截断时 `flags` 第 0 位为 1。
+- `offset>0`：不带命令文本，读取本会话最近一次输出的对应页，不会重新执行。新连接或新会话没有可读的输出。
+- `exit`：0 成功、1 命令出错、2 用法错误（空命令、参数过多或多余）、127 未知命令。`exit` 非零时 `code` 仍为 0。
+- `total` 可以为 0，这时回复只有 10 字节头。
+- 错误：负载短于 4 字节、命令文本非法、`offset>0` 却带了命令 → 4；`offset>=total` 或之前没有输出 → 5；固件没有接入诊断命令 → 8。不认识 op 28 的旧固件返回 4，客户端可以据此判断是否支持。
+
+| 命令 | 输出 |
+|---|---|
+| `help` | 命令列表 |
+| `uname`、`version` | 宿主项目名、版本、构建时间、支持的应用 ABI、ESP-IDF 版本、芯片版本和核数 |
+| `uptime` | 开机时长和复位原因编号 |
+| `free` | 内部 RAM 和 PSRAM 的总量、空闲、最低空闲、最大块 |
+| `apps` | 每个应用的 bank、ID、当前版本、槽位、ABI，以及前台、选中、试运行、待激活标记 |
+| `ps`、`current` | 前台应用、槽位和版本、ABI、App Manager 阶段、就绪和确认标志、generation、最近一次切换 |
+| `status` | op 3 的状态 JSON |
+| `wifi` | Wi-Fi 状态和 IPv4，不含 SSID 和密码 |
+
+诊断命令在传输工作线程上执行，只读 App Manager 已发布的状态快照和堆计数，不占准入锁，所以上传期间也能用。
+
+## 状态 JSON
+
+op 3、诊断命令 `status` 和各客户端的状态页显示的是同一份 JSON。
+
+**当前前台应用**
+
+| 字段 | 含义 |
+|---|---|
+| `loaded_app` | 前台应用所在的 bank，-1 表示没有加载应用 |
+| `loaded`、`version` | 前台应用运行的槽（0 是 A，1 是 B）和发布版本 |
+| `active`、`previous`、`pending`、`trial` | 前台应用在目录里的四个槽位字段 |
+| `payload_abi`、`payload_abi_minor` | 前台应用的 ABI 主、次版本 |
+| `abi` | 固定为 1，是旧管理接口的兼容字段，不代表应用 ABI |
+| `ready` | ELF 已加载 |
+| `runtime_ready` | START 已成功，应用可以接收事件 |
+| `confirmed` | 已就绪，并且没有应用在试运行 |
+| `generation` | 加载代次，每加载一次应用加 1 |
+| `display_completed` | 最近一次应用事件里显示是否成功。不画屏的事件会把它清成 `false` |
+| `cache_bytes` | 所有应用缓存占用的字节数 |
+
+**目录**
+
+| 字段 | 含义 |
+|---|---|
+| `selected` | 开机加载的应用 bank |
+| `trial_app` | 正在试运行或切换中的应用 bank，-1 表示没有 |
+| `capacity` | 最多可安装的应用数，固定为 5 |
+| `apps[]` | 每个已安装应用一项，见下表 |
+
+`apps[]` 每项：
+
+| 字段 | 含义 |
+|---|---|
+| `id`、`name` | 应用 ID 和清单里的显示名（没有清单时等于 ID） |
+| `bank` | 目录位置 0–4 |
+| `slot_bytes` | 槽大小，1048576 |
+| `active`、`previous`、`pending`、`trial` | 槽位字段，含义见 [应用目录与槽位](app-catalog.md#目录) |
+| `versions` | A、B 两槽里通过校验的包的发布版本，无效或空槽为 `null` |
+| `abi`、`inputs` | `active` 版本的 ABI 主版本和清单 `inputs` |
+| `legacy_push_only` | `active` 版本是 ABI 1 |
+| `button_eligible` | 功能键短按能切到它（有 `active` 版本且是 ABI 2） |
+
+**App Manager**
+
+| 字段 | 含义 |
+|---|---|
+| `phase` | 最近一次工作的阶段：`starting`、`idle`、`fault`、`display`、`switching`、`management`、`pairing`、`pairing_reset`、`network`、`timer`、`ble`、`coc`、`channel` |
+| `last_result` | 最近一次操作的结果码 |
+| `last_switch_source`、`last_switch_target` | 最近一次切换的来源（`boot`、`ble`、`button`）和目标应用 ID |
+| `ignored_buttons` | 因为忙或状态变化被忽略的短按次数 |
+| `runtime_diagnostic` | 启动诊断，形如 `reset=1 previous=ready current=ready guard=complete_journal`，见 [启动诊断](app-catalog.md#启动诊断) |
+
+`phase` 为 `fault` 表示没有应用在运行，但仍可以通过蓝牙管理。这时 Wi-Fi 变化不会调用应用，`last_result` 保留启动失败时的结果码。
+
+**应用通信接口**
+
+| 字段 | 含义 |
+|---|---|
+| `ble_service_uuid`、`ble_service_revision`、`ble_characteristics` | 前台应用注册的 GATT 服务 UUID（32 位十六进制，按书写顺序）、注册修订号和特征数。没有注册时分别为空串、0、0 |
+| `coc_version`、`coc_psm`、`coc_state`、`coc_rx_payload_max` | 前台应用的 CoC 通道。打开时 `coc_version=1`、`coc_psm=129`（`0x81`）；`coc_state` 0 未打开、1 等待连接、2 已连接 |
+
+**系统**
+
+| 字段 | 含义 |
+|---|---|
+| `uptime_ms` | 开机到现在的毫秒数 |
+| `reset_reason` | ESP-IDF 复位原因编号：1 上电、3 软件复位、4 异常、5 中断看门狗、6 任务看门狗、9 欠压、11 USB 复位、14 电源毛刺、15 CPU 锁死 |
+| `free_internal_ram`、`minimum_free_internal_ram` | 内部 RAM 当前空闲和本次开机最低空闲 |
+| `free_psram`、`minimum_free_psram` | PSRAM 当前空闲和本次开机最低空闲 |
+
+`uptime_ms` 比上次读到的小，说明中间重启过；结合 `reset_reason` 可以区分“蓝牙断了”和“设备重启了”。
+
+## 并发与准入
+
+宿主里所有会碰 Flash、应用代码或屏幕的工作，都由唯一的 App Manager 任务串行执行。蓝牙回调只复制数据，长操作不会阻塞 NimBLE 任务。
+
+- 上传（op 4）、管理命令（op 9–12）、应用特征（op 13–14）、宿主图片（op 16）、通用消息（op 24–27）都要先取得准入锁。功能键、定时器和网络事件也用同一把锁，拿不到就返回 3。
+- 每个排队的作业都带着发起时的授权代次。长按功能键重置配对后，旧主人排队的作业在执行前会被拒绝。
+- 连接断开不会打断已经开始的显示，借给显示的数据在显示结束后才释放。
+- 宿主用连接编号区分前后两个连接，旧连接的结果不会发给新连接。
+
+## 内存与构建配置
+
+`sdkconfig.defaults` 里的蓝牙相关配置：
+
+| 配置 | 值 |
+|---|---|
+| 角色 | 只启用外设，最多 1 个连接 |
+| ATT MTU | 首选 247 |
+| 动态 GATT 服务 | 启用，供应用自定义服务使用 |
+| L2CAP CoC | 最多 1 个通道 |
+| NimBLE 内存 | 主机分配走 PSRAM |
+| Wi-Fi 与蓝牙共存 | 软件共存 |
+| 蓝牙 SMP 安全 | 关闭。鉴权在应用层完成，链路不加密 |
+
+安装包缓冲（最多 1 MiB）和宿主图片缓冲（最多 5 MiB）都在 PSRAM 里分配，分配失败返回 7。两者共用准入锁，不会同时存在。
+
+## 测试
+
+协议的 C 实现由主机上的原生测试覆盖，使用 OpenSSL 提供 SHA-256 和 HMAC，开启 ASan 和 UBSan：
+
+| 测试 | 覆盖 |
+|---|---|
+| `tests/ble/test_protocol.c` | 签名、序号、重放、分片、上传、会话过期、宿主图片命令 |
+| `tests/ble/test_shell.c` | op 28 的校验、单次执行和分页 |
+| `tests/ble/test_pairing.c`、`tests/ble/pairing-v2.json` | 配对 v2 状态机和固定测试向量 |
+
+这些测试由 `tools/test_ble_protocol.py` 和 `tools/test_pairing.py` 编译运行，运行方法见 [README](../README.md#测试)。电脑端的 Go 实现用同一组向量做对照测试。
