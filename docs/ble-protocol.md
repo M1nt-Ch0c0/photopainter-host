@@ -18,7 +18,7 @@ partition table. Applications are still trusted native ELF code, not a sandbox.
 This is the resident framework's wire reference. New application business
 protocols belong to the application. The photoframe-owned receive
 route is implemented in the sibling application; existing host image opcodes remain compatibility features
-and are not being extended. See the [developer Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Home.md).
+and are not being extended. See the [developer Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/README.md).
 
 ## Discovery
 

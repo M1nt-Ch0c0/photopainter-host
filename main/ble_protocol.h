@@ -7,7 +7,7 @@
 
 /* Wire contract is documented in docs/ble-protocol.md. No RTOS or radio here. */
 #define PP_BLE_VERSION 2
-#define PP_BLE_FRAME_MAX 512
+#define PP_BLE_FRAME_MAX 4096
 #define PP_BLE_INFO_SIZE 20
 #define PP_BLE_IDLE_MS 60000u
 #define PP_BLE_SESSION_MS (2u * 60u * 60u * 1000u)
@@ -18,6 +18,7 @@ enum pp_ble_op {
     PP_BLE_ACTIVATE=9, PP_BLE_SWITCH=10, PP_BLE_ROLLBACK=11, PP_BLE_REMOVE=12,
     PP_BLE_APP_READ=13, PP_BLE_APP_WRITE=14,
     PP_BLE_IMAGE_CAPS=15, PP_BLE_IMAGE_BEGIN=16, PP_BLE_IMAGE_RESULT=17,
+    PP_BLE_CHANNEL_INFO=24, PP_BLE_CHANNEL_OPEN=25, PP_BLE_CHANNEL_EXCHANGE=26, PP_BLE_CHANNEL_CLOSE=27,
 };
 enum pp_ble_error {
     PP_BLE_OK=0, PP_BLE_UNAUTHORIZED=1, PP_BLE_UNCONFIGURED=2, PP_BLE_BUSY=3,
@@ -48,6 +49,7 @@ typedef struct {
     int (*manage)(uint8_t, const char *);
     void (*status)(char *, size_t);
     int (*app)(uint8_t,const uint8_t *,size_t,uint8_t *,size_t *);
+    int (*channel)(uint8_t,const uint8_t *,size_t,uint8_t *,size_t *);
     pp_ble_images *images;
     int (*image_ready)(const char *);
     /* Synchronous: success means physical refresh AND final POWER_OFF done. */

@@ -1,10 +1,12 @@
 # 应用运行层 ABI 2 使用与维护
 
+ABI 2.3 增加独立于连接协议的消息注册、收发、关闭及 `APP_EVENT_CHANNEL`，不扩大旧 140 字节 BLE 事件。接口与 GATT 适配器见 [通用消息通道](docs/abi-2-3-channel.md)。
+
 ABI 2.2 增加单前台所有权 CoC 和 `APP_EVENT_COC`，保留已有布局与 2.0/2.1 语义。接口、非阻塞状态码及回收规则见 [CoC 专项说明](docs/abi-2-2-coc.md)。
 
-本页描述已实现的框架运行接口；开发入门见 [Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Home.md)。固定 ESP-IDF `5e6f53cdb31fe5708eae3f55af9737be2822db22` 与 Registry elf_loader 1.3.3。不同日期的实机证据见 [参考目录](docs/README.md)，不能只凭旧验收记录判断当前设备版本。
+本页描述已实现的框架运行接口；开发入门见 [Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/README.md)。固定 ESP-IDF `5e6f53cdb31fe5708eae3f55af9737be2822db22` 与 Registry elf_loader 1.3.3。不同日期的实机证据见 [参考目录](docs/README.md)，不能只凭旧验收记录判断当前设备版本。
 
-当前源码的配对 v2 **尚未实机验证**。它不改变 APP ABI，下面的应用生命周期与目录合同继续适用；鉴权改为持久配对，旧 HTTP 控制返回 410。
+已保存配对关系的鉴权、维护刷写后保留绑定和手机 Web GATT 显示已在 2026-10-29 验证；首次配对/长按换绑等完整矩阵仍待验收。下面的生命周期与目录合同继续适用；旧 token HTTP 控制返回 410。
 
 兼容扩展 **ABI 2.1** 提供三个受管服务：注册应用 GATT、设置值和注销。`APP_MANIFEST` 保持 2.0，使用新服务时声明 `APP_MANIFEST_BLE`（2.1）。布局不变，旧 ABI 1/2.0 继续运行；不支持 2.1 的旧宿主会拒绝新包。发现、鉴权和应用 OTA 常驻宿主；photoframe APP 已实现图片接收协议，见 [应用协议](https://github.com/M1nt-Ch0c0/photoframe/blob/main/docs/ble-image-input.md)。现有宿主 PNG 路径只作兼容保留。协议和限制见 [BLE 参考](docs/ble-protocol.md)。
 
@@ -77,6 +79,8 @@ ABI 2 入口通过 `app_host_context_v2()` 取得 START=1、INPUT=2、TIMER=3、
 
 开机先处理 `catalog` 未确认 trial，再处理 `elf_state` 分区中 `runtime` 命名空间的 `runtime_boot` 记录。记录包含 magic、阶段、bank、active/previous、ID 与校验和；不改原 catalog blob。active 启动前记阶段 1；回退前记阶段 2，再原子提交回退，进入 previous 前记阶段 3；成功后清为阶段 0。阶段 2 的重启可恢复目录提交，阶段 3 未完成则保持故障空闲，避免两个坏版本无限重启刷屏。损坏、身份不一致或写入失败时不进入应用。明确的成功 CLI 切换可清理旧启动故障记录。
 
+USB 维护复位（`ESP_RST_USB`）不作为应用崩溃证据：在启动记录的格式、校验和及应用身份均有效时，重新为当前选中槽写入一次启动意图，不切换或消耗 previous，也不擦除日志。Panic、看门狗及其他非 USB 复位仍按原阶段执行一次回退并在耗尽后保持故障；USB 重试写入失败或记录损坏时仍拒绝进入应用。
+
 | 管理字段 | 含义 |
 |---|---|
 | `ready` | 保留旧义：ELF 已加载 |
@@ -104,3 +108,5 @@ PHOTOFRAME_TEST_ELF=/path/to/photoframe.app.elf python3 -m unittest discover -s 
 ```
 
 套件运行真实 C 的目录、manifest、双 ABI 生命周期、启动断点恢复、按键策略、缓存、板级打包及管理器；平台桩模拟 Flash/NVS、时间与 RTOS。应用仓库另外运行 PNG 原生测试和两应用入口测试。硬件按键、电源时序及视觉结果不能由这些平台桩代替。
+
+ABI 2.3 通用消息服务的首个实现见 [通道接口与 GATT 适配器](docs/abi-2-3-channel.md)。旧 ABI 2.0–2.2 布局保持不变；手机 Web GATT 已验收，手机原生 CoC/Wi-Fi 未在本轮验收。

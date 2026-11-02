@@ -42,3 +42,5 @@ esp_err_t app_manager_stage_authorized(const char *,const uint8_t *,size_t,uint3
 esp_err_t app_manager_remove_authorized(const char *,uint32_t authority);
 esp_err_t app_manager_ble_request_authorized(bool write,const uint8_t *,size_t,uint8_t *,size_t *,uint32_t authority);
 void app_manager_network_changed(bool connected);
+
+int app_manager_channel_request_authorized(uint8_t op,const uint8_t *,size_t,uint8_t *,size_t *,uint32_t peer,uint32_t authority);

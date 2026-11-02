@@ -3,6 +3,7 @@
 #include "nvs.h"
 #include <openssl/sha.h>
 #include <string.h>
+#include <assert.h>
 static unsigned char flash[3][8 * MODULE_SLOT_BYTES];
 static app_catalog_t persisted, staged;
 static unsigned char boot[56],boot_staged[56];
@@ -122,3 +123,5 @@ void mock_corrupt_payload(int app, int slot) {
     size_t offset = app ? ((app - 1) * 2 + slot) * MODULE_SLOT_BYTES : 0;
     flash[bank][offset + MODULE_HEADER_BYTES + 10] ^= 1;
 }
+
+void mock_corrupt_boot(void) { assert(boot_exists); boot[sizeof(boot)-1] ^= 1; }

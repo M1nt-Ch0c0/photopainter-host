@@ -5,9 +5,27 @@
 #include "app_catalog.h"
 #include "esp_elf.h"
 #include "esp_log.h"
+#include <stdio.h>
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#include "esp_system.h"
+#else
+#define RTC_NOINIT_ATTR
+#endif
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+enum {TRACE_UNKNOWN,TRACE_SLOTS,TRACE_SERVICES,TRACE_GUARD,TRACE_READ,TRACE_ELF_INIT,TRACE_RELOCATE,TRACE_START,TRACE_CONFIRM,TRACE_READY,TRACE_SELECT};
+static RTC_NOINIT_ATTR volatile uint32_t trace_magic,trace_stage;
+static uint32_t previous_trace,reset_reason;
+static const char *trace_names[]={"unknown","slots","services","boot_guard","slot_read","elf_init","elf_relocate","app_start","confirm","ready","select"};
+static void trace(uint32_t stage){trace_stage=stage;}
+const char *app_runtime_diagnostic(void){
+    static char out[192];
+    unsigned now=trace_stage<sizeof(trace_names)/sizeof(trace_names[0])?trace_stage:0;
+    snprintf(out,sizeof(out),"reset=%lu previous=%s current=%s guard=%s",(unsigned long)reset_reason,trace_names[previous_trace],trace_names[now],app_boot_diagnostic());
+    return out;
+}
 static esp_elf_t elf;
 static bool loaded,runtime_ready,event_active,result_received,result_bad,last_display;
 static int slot=-1,app=-1,reported;
@@ -60,31 +78,45 @@ static esp_err_t load_current(void) {
     module_state_t state=module_slots_state();int target=state.trial ? state.pending : state.active;
     if(app_runtime_shutdown()!=ESP_OK)return ESP_FAIL;
     uint8_t *payload=NULL;module_header_t header;
+    trace(TRACE_READ);
     esp_err_t e=module_slots_read(target,&payload,&header);if(e!=ESP_OK)return e;
     if(header.abi==2&&!app_manifest_read(payload,header.length,&manifest)){free(payload);return ESP_ERR_INVALID_ARG;}
+    trace(TRACE_ELF_INIT);
     memset(&elf,0,sizeof(elf));int r=esp_elf_init(&elf);
-    if(r>=0)r=esp_elf_relocate(&elf,payload);
+    if(r>=0){trace(TRACE_RELOCATE);r=esp_elf_relocate(&elf,payload);}
     free(payload);
     if(r<0){esp_elf_deinit(&elf);return ESP_FAIL;}
     loaded=true;slot=target;app=app_catalog_running();version=header.version;abi=header.abi;
     ++generation;if(!generation)++generation;
     app_services_open(app_catalog_get()->apps[app].id,generation);
     if(abi==2) {
-        r=dispatch(APP_EVENT_START,0,NULL,0);
+        trace(TRACE_START);r=dispatch(APP_EVENT_START,0,NULL,0);
         if(r!=APP_OK||!runtime_ready||((manifest.flags&APP_REQUIRES_DISPLAY)&&!last_display)) {
             (void)app_runtime_shutdown();return ESP_FAIL;
         }
+        trace(TRACE_CONFIRM);
         if(in_trial()&&module_slots_confirm()!=ESP_OK)return ESP_FAIL;
     }
+    trace(TRACE_READY);
     ESP_LOGI("app_runtime","ready bank=%d slot=%d ABI=%lu version=%lu",app,slot,(unsigned long)abi,(unsigned long)version);
     return ESP_OK;
 }
 esp_err_t photoframe_plugin_init(void) {
+    previous_trace=trace_magic==0x50505452 && trace_stage<sizeof(trace_names)/sizeof(trace_names[0])?trace_stage:0;
+    trace_magic=0x50505452;
+    bool usb_maintenance_reset=false;
+#ifdef ESP_PLATFORM
+    reset_reason=esp_reset_reason();
+    usb_maintenance_reset=reset_reason==ESP_RST_USB;
+#endif
+    trace(TRACE_SLOTS);
     /* Initial firmware startup; tests may call repeatedly with a fresh mock Flash. */
     if(loaded)(void)app_runtime_shutdown();
     esp_err_t e=module_slots_init();if(e!=ESP_OK)return e;
+    trace(TRACE_SERVICES);
     if(app_services_init()!=ESP_OK||esp_elf_register_symbol(g_esp_photoframe_elfsyms)<0)return ESP_FAIL;
-    e=app_boot_prepare();if(e!=ESP_OK)return e;
+    trace(TRACE_GUARD);
+    e=app_boot_prepare(usb_maintenance_reset);if(e!=ESP_OK)return e;
     e=load_current();
     if(e!=ESP_OK&&app_boot_fallback()==ESP_OK)e=load_current();
     if(e==ESP_OK)e=app_boot_complete();
@@ -92,6 +124,7 @@ esp_err_t photoframe_plugin_init(void) {
     return e;
 }
 esp_err_t photoframe_plugin_select(const char *id,bool update) {
+    trace(TRACE_SELECT);
     int target=app_catalog_find(id);
     if(!update&&!in_trial()&&loaded&&target==app&&runtime_ready)return ESP_OK;
     esp_err_t e=app_catalog_begin(target,update);if(e!=ESP_OK)return e;
@@ -161,6 +194,13 @@ int app_runtime_ble(const app_ble_event_v2_t *event) {
 int app_runtime_coc(const app_coc_event_v22_t *event) {
     if(abi!=2 || !runtime_ready || manifest.abi_minor<2)return APP_ERR_UNSUPPORTED;
     int result=dispatch(APP_EVENT_COC,0,(const uint8_t *)event,sizeof(*event));
+    if(result==APP_ERR_RUNTIME)(void)app_runtime_shutdown();
+    return result;
+}
+
+int app_runtime_channel(const app_channel_event_v23_t *event) {
+    if(abi!=2 || !runtime_ready || manifest.abi_minor<3)return APP_ERR_UNSUPPORTED;
+    int result=dispatch(APP_EVENT_CHANNEL,0,(const uint8_t *)event,sizeof(*event));
     if(result==APP_ERR_RUNTIME)(void)app_runtime_shutdown();
     return result;
 }

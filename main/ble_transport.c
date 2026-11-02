@@ -6,6 +6,7 @@
 #include "app_manager.h"
 #include "app_runtime.h"
 #include "app_ble.h"
+#include "app_channel.h"
 #include "ble_coc.h"
 #include "app_pairing.h"
 #include "esp_heap_caps.h"
@@ -35,6 +36,8 @@ static const ble_uuid128_t info_uuid=BLE_UUID128_INIT(UUID_BYTES(2));
 static const ble_uuid128_t challenge_uuid=BLE_UUID128_INIT(UUID_BYTES(3));
 static const ble_uuid128_t rx_uuid=BLE_UUID128_INIT(UUID_BYTES(4));
 static const ble_uuid128_t tx_uuid=BLE_UUID128_INIT(UUID_BYTES(5));
+static const ble_uuid128_t limits_uuid=BLE_UUID128_INIT(UUID_BYTES(6));
+static const ble_uuid128_t channel_limits_uuid=BLE_UUID128_INIT(UUID_BYTES(7));
 static SemaphoreHandle_t lock;
 static uint8_t info[20],ssid_hash[8],challenge[32],response[512],own_addr_type;
 static size_t response_size;
@@ -49,7 +52,7 @@ static pp_ble_session *session;
 static pp_ble_images image_receipts;
 static char advertised_name[8];
 static uint32_t authorized_binding_epoch;
-static uint32_t request_binding_epoch;
+static uint32_t request_binding_epoch,request_peer;
 static atomic_uint reset_acknowledged;
 static struct ble_npl_event advertise_event;
 static struct ble_npl_event app_event;
@@ -94,7 +97,7 @@ static void schedule_termination(uint32_t expected_epoch,uint16_t conn) {
     take();
     if(epoch==expected_epoch && connection==conn && conn!=BLE_HS_CONN_HANDLE_NONE &&
        (terminate_epoch!=expected_epoch || terminate_connection!=conn)) {
-        authenticated=false;app_ble_connection(false);
+        authenticated=false;app_ble_connection(false);app_channel_peer_authorized(epoch,false);
         terminate_epoch=expected_epoch;terminate_connection=conn;
         ble_npl_eventq_put(nimble_port_get_dflt_eventq(),&terminate_event);
     }
@@ -104,7 +107,7 @@ void photopainter_ble_revoke(void) {
     if(!atomic_load(&started))return;
     take();uint32_t current=epoch;uint16_t conn=connection;
     authenticated=false;authorized_binding_epoch=0;memset(coc_auth_key,0,32);
-    app_ble_connection(false);pending=false;processing=false;response_size=0;
+    app_ble_connection(false);app_channel_peer_authorized(epoch,false);pending=false;processing=false;response_size=0;
     memset(&fragments,0,sizeof(fragments));challenge_epoch=0;
     give();
     photopainter_coc_wakeup();
@@ -225,7 +228,18 @@ static int access_gatt(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *
         }
         which=4; /* Same signed, fragmented protocol; bound to this characteristic. */
     }
-    if(which==2) result=os_mbuf_append(ctx->om,info,sizeof(info))?BLE_ATT_ERR_INSUFFICIENT_RES:0;
+    if(which==7) {
+        /* v1: logical request limit, reply limit, WRITE_NO_RSP support. */
+        const uint8_t limits[6]={1,PP_BLE_FRAME_MAX&255,PP_BLE_FRAME_MAX>>8,0,2,1};
+        result=os_mbuf_append(ctx->om,limits,sizeof(limits))?BLE_ATT_ERR_INSUFFICIENT_RES:0;
+    } else if(which==6) {
+        /* Connection-local ATT value capacity, including our fragment header. */
+        uint16_t mtu=ble_att_mtu(conn);
+        uint16_t capacity=mtu>3?mtu-3:20;
+        if(capacity>512) capacity=512;
+        uint8_t limits[3]={1,(uint8_t)capacity,(uint8_t)(capacity>>8)};
+        result=os_mbuf_append(ctx->om,limits,sizeof(limits))?BLE_ATT_ERR_INSUFFICIENT_RES:0;
+    } else if(which==2) result=os_mbuf_append(ctx->om,info,sizeof(info))?BLE_ATT_ERR_INSUFFICIENT_RES:0;
     else if(which==3) {
         if(challenge_epoch!=epoch) result=BLE_ATT_ERR_UNLIKELY;
         else result=os_mbuf_append(ctx->om,challenge,sizeof(challenge))?BLE_ATT_ERR_INSUFFICIENT_RES:0;
@@ -253,15 +267,23 @@ static const struct ble_gatt_svc_def services[]={
     {.type=BLE_GATT_SVC_TYPE_PRIMARY,.uuid=&service_uuid.u,.characteristics=(struct ble_gatt_chr_def[]){
         {.uuid=&info_uuid.u,.access_cb=access_gatt,.arg=(void *)2,.flags=BLE_GATT_CHR_F_READ},
         {.uuid=&challenge_uuid.u,.access_cb=access_gatt,.arg=(void *)3,.flags=BLE_GATT_CHR_F_READ},
-        {.uuid=&rx_uuid.u,.access_cb=access_gatt,.arg=(void *)4,.flags=BLE_GATT_CHR_F_WRITE},
+        {.uuid=&rx_uuid.u,.access_cb=access_gatt,.arg=(void *)4,.flags=BLE_GATT_CHR_F_WRITE|BLE_GATT_CHR_F_WRITE_NO_RSP},
         {.uuid=&tx_uuid.u,.access_cb=access_gatt,.arg=(void *)5,.flags=BLE_GATT_CHR_F_READ},
+        {.uuid=&limits_uuid.u,.access_cb=access_gatt,.arg=(void *)6,.flags=BLE_GATT_CHR_F_READ},
+        {.uuid=&channel_limits_uuid.u,.access_cb=access_gatt,.arg=(void *)7,.flags=BLE_GATT_CHR_F_READ},
         {0}}},
     {0}
 };
 static int gap_event(struct ble_gap_event *event,void *arg) {
     (void)arg;
+    if(event->type==BLE_GAP_EVENT_CONNECT)
+        ESP_LOGI("ble","GAP connect status=%d handle=%u",event->connect.status,event->connect.conn_handle);
+    else if(event->type==BLE_GAP_EVENT_DISCONNECT)
+        ESP_LOGI("ble","GAP disconnect reason=%d handle=%u",event->disconnect.reason,event->disconnect.conn.conn_handle);
+    else if(event->type==BLE_GAP_EVENT_MTU)
+        ESP_LOGI("ble","ATT MTU=%u handle=%u",event->mtu.value,event->mtu.conn_handle);
     if(event->type==BLE_GAP_EVENT_CONNECT || event->type==BLE_GAP_EVENT_DISCONNECT) {
-        take();epoch++;challenge_epoch=0;pending=processing=false;response_size=0;
+        take();app_channel_peer_authorized(epoch,false);epoch++;challenge_epoch=0;pending=processing=false;response_size=0;
         authenticated=false;authorized_binding_epoch=0;memset(coc_auth_key,0,32);app_ble_connection(false);
         subscribed=0;
         memset(&fragments,0,sizeof(fragments));memset(challenge,0,sizeof(challenge));
@@ -308,6 +330,10 @@ static int app_operation(uint8_t op,const uint8_t *p,size_t n,uint8_t *out,size_
     if(request_target && (op!=PP_BLE_APP_WRITE || index!=request_target-1))return PP_BLE_INVALID;
     return app_manager_ble_request_authorized(op==PP_BLE_APP_WRITE,p,n,out,size,request_binding_epoch);
 }
+static int channel_operation(uint8_t op,const uint8_t *p,size_t n,uint8_t *out,size_t *size) {
+    if(request_target)return PP_BLE_INVALID;
+    return app_manager_channel_request_authorized(op,p,n,out,size,request_peer,request_binding_epoch);
+}
 static int image_ready(const char *id) {
     return photoframe_plugin_is_ready() && app_manager_target_is_running(id) &&
         app_runtime_accepts_png()?PP_BLE_OK:PP_BLE_STATE;
@@ -326,7 +352,7 @@ static const pp_ble_ops operations={
     .shell=host_shell_exec,
     .acquire=acquire_authorized,.release=app_manager_release,.alloc=allocate_package,
     .free=heap_caps_free,.stage=stage,.manage=manage,.status=app_manager_status,
-    .app=app_operation,.images=&image_receipts,.image_ready=image_ready,.render=render_image,
+    .app=app_operation,.channel=channel_operation,.images=&image_receipts,.image_ready=image_ready,.render=render_image,
 };
 static void transport_worker(void *arg) {
     (void)arg;uint32_t local_epoch=0,session_binding_epoch=0,connection_binding_epoch=0;
@@ -342,7 +368,7 @@ static void transport_worker(void *arg) {
             atomic_store(&reset_acknowledged,resetting);
             vTaskDelay(pdMS_TO_TICKS(20));continue;
         }
-        uint8_t request[512],out[512],current_info[20];size_t size=0;
+        uint8_t request[PP_BLE_FRAME_MAX],out[512],current_info[20];size_t size=0;
         take();uint32_t current_epoch=epoch;uint16_t conn=connection;
         memcpy(current_info,info,20);
         if(pending) {size=fragments.total;request_target=fragment_target;memcpy(request,fragments.data,size);pending=false;fragments.received=fragments.total=0;}
@@ -356,7 +382,7 @@ static void transport_worker(void *arg) {
             }
         }
         if(size && conn!=BLE_HS_CONN_HANDLE_NONE) {
-            uint32_t binding_epoch=app_pairing_authorization_epoch();request_binding_epoch=binding_epoch;
+            uint32_t binding_epoch=app_pairing_authorization_epoch();request_binding_epoch=binding_epoch;request_peer=local_epoch;
             if(app_manager_pairing_reset_pending() || connection_binding_epoch!=binding_epoch ||
                (session->authenticated&&session_binding_epoch!=binding_epoch))pp_ble_close(session);
             size_t n;
@@ -374,7 +400,7 @@ static void transport_worker(void *arg) {
                 memcpy(response,out,n);response_size=n;processing=false;
                 if(authenticated!=session->authenticated) {
                     authenticated=session->authenticated;app_ble_connection(authenticated);
-                    if(authenticated){memcpy(coc_auth_key,session->key,32);authorized_binding_epoch=session_binding_epoch;}
+                    if(authenticated){memcpy(coc_auth_key,session->key,32);authorized_binding_epoch=session_binding_epoch;app_channel_peer_authorized(epoch,true);}
                     else {memset(coc_auth_key,0,32);authorized_binding_epoch=0;}
                 }
             }give();
@@ -398,7 +424,7 @@ static void on_sync(void) {
 }
 static void on_reset(int reason) {
     photopainter_coc_reset();
-    take();synced=false;connection=BLE_HS_CONN_HANDLE_NONE;epoch++;
+    take();app_channel_peer_authorized(epoch,false);synced=false;connection=BLE_HS_CONN_HANDLE_NONE;epoch++;
     authenticated=false;app_ble_connection(false);
     subscribed=0;
     challenge_epoch=0;pending=processing=false;response_size=0;give();
@@ -424,7 +450,7 @@ esp_err_t photopainter_ble_start(void) {
     ble_npl_event_init(&terminate_event,terminate_expired,NULL);
     ble_hs_cfg.sync_cb=on_sync;ble_hs_cfg.reset_cb=on_reset;
     if(ble_gatts_count_cfg(services) || ble_gatts_add_svcs(services)) return ESP_FAIL;
-    if(xTaskCreate(transport_worker,"ble_transfer",12288,NULL,4,NULL)!=pdPASS) return ESP_ERR_NO_MEM;
+    if(xTaskCreate(transport_worker,"ble_transfer",16384,NULL,4,NULL)!=pdPASS) return ESP_ERR_NO_MEM;
     started=true;nimble_port_freertos_init(host_worker);
     return ESP_OK;
 }

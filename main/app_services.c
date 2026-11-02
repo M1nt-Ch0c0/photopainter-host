@@ -2,6 +2,7 @@
 #include "app_services.h"
 #include "app_ble.h"
 #include "app_coc.h"
+#include "app_channel.h"
 #include "app_manager.h"
 #include "photopainter_board.h"
 #include "esp_timer.h"
@@ -38,9 +39,9 @@ esp_err_t app_services_init(void) {
 void app_services_open(const char *id,uint32_t gen) {
     strncpy(current,id,sizeof(current)-1);current[sizeof(current)-1]=0;
     generation=gen;timer_interval=0;context=NULL;
-    app_ble_bind(gen);app_coc_bind(gen);
+    app_ble_bind(gen);app_coc_bind(gen);app_channel_bind(gen);
 }
-void app_services_close(void) {app_coc_cancel();app_ble_cancel();timer_interval=0;context=NULL;current[0]=0;}
+void app_services_close(void) {app_channel_cancel();app_coc_cancel();app_ble_cancel();timer_interval=0;context=NULL;current[0]=0;}
 esp_err_t app_services_begin(const app_context_v2_t *c) {
     if(context||!c||c->generation!=generation)return ESP_ERR_INVALID_STATE;
     displayed=display_called=borrowed=false;
@@ -139,3 +140,16 @@ int32_t app_host_coc_send_v22(uint32_t s,const void *p,uint32_t n){
     return coc_active() && context->event!=APP_EVENT_STOP?app_coc_send(generation,s,p,n):APP_ERR_RUNTIME;
 }
 int32_t app_host_coc_close_v22(void){return coc_active()?app_coc_close(generation):APP_ERR_RUNTIME;}
+
+static bool channel_active(void){return active() && context->abi_minor>=3;}
+int32_t app_host_channel_register_v23(const app_channel_config_v23_t *c){
+    return channel_active() && context->event!=APP_EVENT_STOP?app_channel_register(generation,c):APP_ERR_RUNTIME;
+}
+int32_t app_host_channel_info_v23(app_channel_info_v23_t *i){return channel_active()?app_channel_info(generation,i):APP_ERR_RUNTIME;}
+int32_t app_host_channel_recv_v23(uint32_t s,void *p,uint32_t n,uint32_t *received){
+    return channel_active() && context->event!=APP_EVENT_STOP?app_channel_recv(generation,s,p,n,received):APP_ERR_RUNTIME;
+}
+int32_t app_host_channel_send_v23(uint32_t s,const void *p,uint32_t n){
+    return channel_active() && context->event!=APP_EVENT_STOP?app_channel_send(generation,s,p,n):APP_ERR_RUNTIME;
+}
+int32_t app_host_channel_close_v23(void){return channel_active()?app_channel_close(generation):APP_ERR_RUNTIME;}

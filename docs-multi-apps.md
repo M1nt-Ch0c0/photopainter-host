@@ -2,7 +2,7 @@
 
 当前配对 v2 **尚未实机验证**；HTTP token 控制已退役，已配对 BLE 管理及下述存储/文件规则为当前入口。
 
-本页记录宿主的五 bank 应用目录、A/B 管理和 SD/NVS 网络配置。框架开发入口见 [开发者 Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Home.md)。这里维护框架规则；相框收图业务与电脑渲染/发送流程在各自仓库。
+本页记录宿主的五 bank 应用目录、A/B 管理和 SD/NVS 网络配置。框架开发入口见 [开发者 Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/README.md)。这里维护框架规则；相框收图业务与电脑渲染/发送流程在各自仓库。
 
 ## Wi-Fi 配置
 
@@ -117,7 +117,7 @@ v2 的 `/api/module` GET/POST 均返回 410。应用管理通过 BLE 进行；�
 
 `selected/trial_app/loaded_app` 是 bank 索引，`apps[].id` 给出名称；`versions` 按 A/B 显示通过包头、ID、payload SHA 和 ELF 校验的版本，无效为 null。版本存在不等于已运行确认，要结合 active/previous/pending 和 runtime_ready。当前应用 ABI 看 payload_abi，不看旧顶层管理封套 abi。
 
-旧 HTTP PNG 输入目标与错误语义只作历史参考，见 [旧输入参考](docs/legacy-image-input.md)；新相框 APP 收图路线见 [Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/BLE-Image-App-Roadmap.md)。
+旧 HTTP PNG 输入目标与错误语义只作历史参考，见 [旧输入参考](docs/legacy-image-input.md)；新相框 APP 收图路线见 [Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/06-bluetooth.md)。
 
 ## 历史布局迁移与当前维护边界
 

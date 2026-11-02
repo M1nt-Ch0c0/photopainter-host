@@ -1,14 +1,14 @@
 # PhotoPainter Host 应用框架
 
-当前源码提供 **物理配对 v2 与 ABI 2.2 单所有权 L2CAP CoC**。配对 v2 已完成离线测试和构建，**尚未实机验证**；按键批准、重启保持绑定、重置换绑和新固件上的物理推图留待现场验收。2026-10-27 的 photoframe v20 CoC 实测属于旧认证固件，不能替代本轮验证，接口见 [ABI 2.2 CoC](docs/abi-2-2-coc.md)。
+当前宿主提供 **物理配对 v2、ABI 2.3 通用消息通道和 ABI 2.2 单所有权 CoC**。配合 photoframe v21 与浏览器插件 0.3.1，手机 Web GATT 已完成签名显示回执及人眼画面、方向、颜色验收：67,626 字节上传 7.9 秒，刷新等待 20.3 秒。接口见 [ABI 2.3](docs/abi-2-3-channel.md)，完整证据见 [当前状态](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-status.md)。本轮没有重新验收首次物理配对、长按换绑、手机原生 CoC 或 Wi-Fi。
 
-**源码基线：ABI 2.2 功能提交 `f742a47` 已推送 main。** 控制台现为独立 photopainter-console 仓库；源码提交、部署和验证范围分别记录。实机验收范围见 [代码与证据](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Status-and-Evidence.md)。
+**版本与证据：**宿主源码、装机二进制摘要、APP/插件版本和不同平台的实测范围分别记录；2026-10-27 的 v20/Mac CoC 成功仍保留为历史证据，不能代替新版本或其他平台验收。
 
 本仓库是 ESP32-S3 PhotoPainter 的常驻框架：负责设备通信、鉴权、独立应用安装、ELF 加载、统一调度、切换与宿主服务。业务页面、图片解码和应用自身协议属于 APP。
 
 **物理配对 v2：**设备在网页发起配对后显示六位码，核对一致并短按 GPIO 4 功能键确认；绑定关系持久保存，后续连接自动证明已保存的关系。功能键长按 8 秒并松开可清除绑定。BOOT（GPIO 0）和电源键（GPIO 5）不参与此操作。配对是宿主系统界面，即使业务 APP 故障空闲也能使用；不更改 Wi-Fi、应用目录或显示 ABI。精确协议见 [配对 v2](docs/ble-pairing-v2.md)，验证范围见 [配对验证](docs/validation-pairing-v2-2026-10-29.md)。
 
-**开发从 [PhotoPainter 开发者 Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Home.md) 开始。** AI 协作先读 [AGENTS.md](AGENTS.md) 和项目 [Skill](.agents/skills/develop-photopainter-stack/SKILL.md)。
+**开发从 [PhotoPainter 开发者 Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/README.md) 开始。** AI 协作先读 [AGENTS.md](AGENTS.md) 和项目 [Skill](.agents/skills/develop-photopainter-stack/SKILL.md)。
 
 ## 框架能力
 
@@ -16,15 +16,15 @@
 |---|---|
 | 通信与鉴权 | Wi-Fi 配置/连接、常驻 NimBLE、设备发现、物理配对与持久 owner、逐连接双向 HMAC |
 | 应用管理 | 五个 APP、各自 A/B、备用槽上传、显式试运行、确认、回滚和有界启动恢复 |
-| 运行层 | 单 ELF 前台运行，ABI 1 兼容及 ABI 2.0/2.1/2.2 合作式事件 |
-| 宿主服务 | 六色逻辑帧显示、RAM 缓存、时间、定时器、受管 GATT 与单所有权 CoC |
+| 运行层 | 单 ELF 前台运行，ABI 1 兼容及 ABI 2.0/2.1/2.2/2.3 合作式事件 |
+| 宿主服务 | 六色逻辑帧显示、RAM 缓存、时间、定时器、受管 GATT、单所有权 CoC 和通用消息邮箱 |
 | 切换与清理 | GPIO 4 配对确认/长按解绑，已绑定且无配对请求时短按仍选择已确认 ABI 2 APP |
 
 当前 SDK 向 APP 提供网络连接状态、受管 GATT 和 CoC，尚未提供通用 Wi-Fi socket / HTTP client ABI。应用是受信任原生代码，不是隔离进程。
 
 v2 不读取或接受旧 `push_token`，BLE op 1 永久拒绝；旧 `/api/push`、`/api/module`、`/api/wifi` 返回 410，不执行请求。`GET /health` 保留无显示副作用的存活探测。已配对 owner 继续通过 BLE 执行应用管理；Wi-Fi 配置仍可通过既有 SD/USB 维护，不能拿旧 token 绕过物理解绑。
 
-相框 APP 保留自己的收图、校验、断线处理与完成回执；宿主提供通用通信、鉴权、OTA、调度和显示。2026-10-27 的 CoC 扩展改善连续传输，不把 PNG 业务移回宿主。当前验收范围见 [状态页](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Status-and-Evidence.md)。保留旧兼容通道，不继续扩展专用 PNG 宿主协议。
+相框 APP 保留自己的收图、校验、断线处理与完成回执；宿主提供通用通信、鉴权、OTA、调度和显示。2026-10-27 的 CoC 扩展改善连续传输，不把 PNG 业务移回宿主。当前验收范围见 [状态页](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-status.md)。保留旧兼容通道，不继续扩展专用 PNG 宿主协议。
 
 ## 框架开发与验证
 

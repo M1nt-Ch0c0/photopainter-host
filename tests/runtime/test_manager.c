@@ -5,6 +5,7 @@
 #include "app_catalog.h"
 #include "app_ble.h"
 #include "app_coc.h"
+#include "app_channel.h"
 #include "app_pairing.h"
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
@@ -59,16 +60,19 @@ int64_t esp_timer_get_time(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC
 int esp_reset_reason(void){return 15;}
 static app_catalog_t catalog={.selected=-1,.trial_app=-1};
 static atomic_int selects,stages,removes,rollbacks;
+static atomic_int catalog_reads;
+static atomic_bool fail_next_ble;
 const app_catalog_t *app_catalog_get(void){return &catalog;}
 module_state_t module_slots_state(void){return (module_state_t){-1,-1,-1,0};}
-esp_err_t app_catalog_read(int a,int b,uint8_t **p,module_header_t *h){(void)a;(void)b;(void)p;(void)h;return -1;}
+esp_err_t app_catalog_read(int a,int b,uint8_t **p,module_header_t *h){(void)a;(void)b;(void)p;(void)h;catalog_reads++;return -1;}
 int app_catalog_find(const char *id){(void)id;return -1;}
 esp_err_t app_catalog_stage(const char *id,const uint8_t *p,size_t n){(void)id;(void)p;(void)n;stages++;return 0;}
 esp_err_t app_catalog_remove(int i){(void)i;removes++;return 0;}
 bool app_manifest_read(const uint8_t *p,size_t n,app_manifest_v2_t *m){(void)p;(void)n;(void)m;return false;}
 void app_services_drop_cache(const char *id){(void)id;}
 uint32_t app_services_cache_bytes(void){return 0;}
-bool app_services_timer_due(uint32_t *id){(void)id;return false;}
+static atomic_bool timer_due;static atomic_uint timer_events;
+bool app_services_timer_due(uint32_t *id){if(!atomic_exchange(&timer_due,false))return false;*id=1;return true;}
 static bool connected;
 void app_services_network(bool v){connected=v;}
 static atomic_int events,inside,allow_finish,finished;
@@ -92,8 +96,9 @@ esp_err_t app_services_legacy_begin(void){assert(app_manager_busy());return app_
 void app_services_end(void){assert(app_manager_busy());app_manager_display_end();}
 atomic_size_t mock_free_psram=8000000,mock_free_internal=32768;
 void photopainter_ble_app_changed(void){}
-int app_runtime_ble(const app_ble_event_v2_t *event){assert(event->type==APP_BLE_CONNECTED || event->type==APP_BLE_WRITTEN);ble_events++;return APP_OK;}
-int app_runtime_event(uint32_t type,uint32_t timer){assert(type==APP_EVENT_NETWORK&&connected);(void)timer;events++;return 0;}
+int app_runtime_ble(const app_ble_event_v2_t *event){assert(event->type==APP_BLE_CONNECTED || event->type==APP_BLE_WRITTEN);ble_events++;if(atomic_exchange(&fail_next_ble,false)){runtime_ready=false;return APP_ERR_RUNTIME;}return APP_OK;}
+int app_runtime_event(uint32_t type,uint32_t timer){if(type==APP_EVENT_TIMER){assert(timer==1);timer_events++;return 0;}assert(type==APP_EVENT_NETWORK&&connected);events++;return 0;}
+const char *app_runtime_diagnostic(void){return "mock";}
 uint32_t app_runtime_abi(void){return 2;}
 uint32_t app_runtime_abi_minor(void){return 2;}
 uint32_t app_runtime_generation(void){return 42;}
@@ -104,6 +109,14 @@ int app_coc_info(uint32_t gen,app_coc_info_v22_t *info){(void)gen;(void)info;ret
 bool app_coc_take(uint32_t gen,app_coc_event_v22_t *event){(void)gen;(void)event;return false;}
 bool app_coc_registration(uint32_t *gen,uint32_t *rev,uint32_t *max){(void)gen;(void)rev;(void)max;return false;}
 void app_coc_disconnected(uint32_t revision,uint32_t session,int error){(void)revision;(void)session;(void)error;}
+int app_runtime_channel(const app_channel_event_v23_t *event){
+    if(event->type&APP_CHANNEL_RX_READY){
+        uint8_t data[4096];uint32_t n;
+        assert(app_channel_recv(42,event->session,data,sizeof(data),&n)==0);
+        assert(app_channel_send(42,event->session,data,n>64?64:n)==0);
+    }
+    return APP_OK;
+}
 int app_runtime_coc(const app_coc_event_v22_t *event){(void)event;assert(false);return APP_ERR_RUNTIME;}
 int photoframe_plugin_slot(void){return 0;}
 static int loaded_app=-1;
@@ -210,7 +223,7 @@ int main(void) {
     reset_ack=serial;wait_reset(1);
     /* Reproduce the old local-frame TOCTOU: its precheck was before reset, but
      * it obtains admission only after reset has finished. No side effect runs. */
-    unsigned before_select=selects,before_stage=stages,before_remove=removes,before_rollback=rollbacks;
+    int before_select=selects,before_stage=stages,before_remove=removes,before_rollback=rollbacks;
     acquire_idle();
     uint8_t dummy[16]={0x53};
     assert(app_manager_select_authorized("photoframe",false,"ble",1)==ESP_ERR_INVALID_STATE);
@@ -246,5 +259,48 @@ int main(void) {
     allow_return=true;pthread_join(t,NULL);assert(finished);wait_reset(3);
     assert(!app_manager_display_busy()&&!app_manager_pairing_reset_pending());
     assert(app_manager_display_begin());app_manager_display_end();
+    /* GATT hot path must not validate every ELF slot per data/receipt pair. */
+    acquire_idle();strcpy(catalog.apps[0].id,"photoframe");
+    app_ble_bind(42);assert(app_ble_register(42,&service)==APP_OK);app_ble_connection(true);
+    uint32_t data_revision;assert(app_ble_schema(NULL,NULL,&data_revision));
+    uint32_t words[35]={42,data_revision,0};uint8_t data_reply[128];size_t data_size;
+    int reads_before=catalog_reads;
+    for(unsigned n=0;n<100;n++) {
+        assert(app_manager_ble_request_authorized(true,(const uint8_t *)words,140,data_reply,&data_size,app_pairing_authorization_epoch())==PP_BLE_OK);
+        assert(app_manager_ble_request_authorized(false,(const uint8_t *)words,12,data_reply,&data_size,app_pairing_authorization_epoch())==PP_BLE_OK);
+    }
+    assert(catalog_reads==reads_before);
+    app_manager_release();timer_due=true;
+    for(unsigned i=0;!timer_events&&i<1000;i++)usleep(1000);
+    acquire_idle();assert(timer_events==1&&catalog_reads==reads_before);
+    assert(app_manager_select("photoframe",false)==ESP_OK);assert(catalog_reads>reads_before);
+    /* Execute the real mailbox through the production Manager and admission,
+     * not just a queue stub. A peer revoked before dispatch cannot consume DATA. */
+    app_channel_bind(42);
+    app_channel_config_v23_t channel_config={.size=sizeof(channel_config),.service={1},.max_message_bytes=4096,.max_reply_bytes=64};
+    assert(app_channel_register(42,&channel_config)==0);app_channel_peer_authorized(201,true);
+    uint8_t channel_reply[256],channel_request[3012]={0};size_t channel_size;
+    uint32_t auth=app_pairing_authorization_epoch();
+    assert(app_manager_channel_request_authorized(PP_BLE_CHANNEL_INFO,NULL,0,channel_reply,&channel_size,201,auth)==0&&channel_size==32);
+    assert(channel_reply[0]==42&&channel_reply[8]==0xcf&&channel_reply[9]==0x0f);
+    memcpy(channel_request,channel_reply,8);
+    assert(app_manager_channel_request_authorized(PP_BLE_CHANNEL_OPEN,channel_request,8,channel_reply,&channel_size,201,auth)==0&&channel_size==4);
+    memcpy(channel_request+8,channel_reply,4);memset(channel_request+12,0x5a,3000);
+    reads_before=catalog_reads;
+    for(unsigned n=0;n<10;n++){
+        assert(app_manager_channel_request_authorized(PP_BLE_CHANNEL_EXCHANGE,channel_request,sizeof(channel_request),channel_reply,&channel_size,201,auth)==0);
+        assert(channel_size==64&&channel_reply[0]==0x5a&&channel_reply[63]==0x5a);
+    }
+    assert(catalog_reads==reads_before);
+    app_channel_peer_authorized(201,false);
+    assert(app_manager_channel_request_authorized(PP_BLE_CHANNEL_EXCHANGE,channel_request,sizeof(channel_request),channel_reply,&channel_size,201,auth)==PP_BLE_STATE);
+    app_channel_cancel();
+    reads_before=catalog_reads;fail_next_ble=true;
+    assert(app_manager_ble_request_authorized(true,(const uint8_t *)words,140,data_reply,&data_size,app_pairing_authorization_epoch())==PP_BLE_STORAGE);
+    assert(catalog_reads>reads_before);
+    app_manager_status(status,sizeof(status));
+    cJSON *failed_runtime=cJSON_Parse(status);assert(failed_runtime);
+    assert(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(failed_runtime,"runtime_ready")));
+    cJSON_Delete(failed_runtime);app_manager_release();
     return 0;
 }

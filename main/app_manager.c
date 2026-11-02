@@ -6,6 +6,7 @@
 #include "app_button.h"
 #include "app_ble.h"
 #include "app_coc.h"
+#include "app_channel.h"
 #include "app_pairing.h"
 #include "ble_transport.h"
 #include "wifi_sd.h"
@@ -23,9 +24,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-enum {RENDER,SELECT,ROLLBACK,STAGE,REMOVE,WIFI_READ,WIFI_SAVE,NEXT,BLE_FLUSH,PAIR_BUTTON,BLE_REQUEST};
+enum {RENDER,SELECT,ROLLBACK,STAGE,REMOVE,WIFI_READ,WIFI_SAVE,NEXT,BLE_FLUSH,PAIR_BUTTON,BLE_REQUEST,CHANNEL_REQUEST};
 typedef struct {
-    int op;uint32_t generation,authorization_epoch;const char *id;const char *source;const void *data;size_t size;bool update;
+    int op;uint32_t generation,authorization_epoch,command;const char *id;const char *source;const void *data;size_t size;bool update;
     uint8_t *output;size_t *output_size;
     int *result;SemaphoreHandle_t done;
 } job_t;
@@ -42,6 +43,7 @@ static char snapshot[4096]="{\"ready\":false,\"runtime_ready\":false,\"phase\":\
 static const char *phase="starting",*source="boot";
 static int last_result;
 static char last_target[32];
+static void request_put32(uint8_t *p,uint32_t v){for(unsigned i=0;i<4;i++)p[i]=(uint8_t)(v>>(8*i));}
 static uint32_t request_word(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
 bool app_manager_busy(void){return atomic_load(&busy);}
 uint32_t app_manager_epoch(void){return atomic_load(&epoch);}
@@ -76,6 +78,7 @@ void app_manager_network_changed(bool value){atomic_store(&network_value,value);
 static void update_snapshot(void) {
     const app_catalog_t *c=app_catalog_get();module_state_t state=module_slots_state();
     cJSON *o=cJSON_CreateObject();if(!o)return;
+    cJSON_AddStringToObject(o,"runtime_diagnostic",app_runtime_diagnostic());
     cJSON_AddNumberToObject(o,"abi",1); /* legacy envelope, not current payload ABI */
     cJSON_AddNumberToObject(o,"payload_abi",app_runtime_abi());
     cJSON_AddNumberToObject(o,"payload_abi_minor",app_runtime_abi_minor());
@@ -181,7 +184,7 @@ static int next_app(void) {
     return ESP_ERR_NOT_FOUND;
 }
 static int execute(const job_t *j) {
-    if(j->authorization_epoch && (atomic_load(&reset_pending)||j->authorization_epoch!=app_pairing_authorization_epoch()))return j->op==BLE_REQUEST?PP_BLE_STATE:ESP_ERR_INVALID_STATE;
+    if(j->authorization_epoch && (atomic_load(&reset_pending)||j->authorization_epoch!=app_pairing_authorization_epoch()))return j->op==BLE_REQUEST||j->op==CHANNEL_REQUEST?PP_BLE_STATE:ESP_ERR_INVALID_STATE;
     switch(j->op) {
     case RENDER:return j->generation==app_runtime_generation()?photoframe_plugin_render(j->data,j->size):APP_ERR_RUNTIME;
     case SELECT:source=j->source;snprintf(last_target,sizeof(last_target),"%s",j->id);return photoframe_plugin_select(j->id,j->update);
@@ -208,6 +211,49 @@ static int execute(const job_t *j) {
                 if(app_runtime_ready())(void)app_runtime_coc(&coc_event);
         }
         return result;
+    }
+    case CHANNEL_REQUEST: {
+        const uint8_t *p=j->data;uint32_t command=j->command;
+        *j->output_size=0;
+        app_channel_config_v23_t config;uint32_t generation=0,revision=0;
+        if(!app_runtime_ready() || !app_channel_schema(&config,&generation,&revision))return PP_BLE_STATE;
+        if(command==PP_BLE_CHANNEL_INFO){
+            if(j->size)return PP_BLE_INVALID;
+            uint32_t limit=config.max_message_bytes;
+            if(limit>PP_BLE_FRAME_MAX-49)limit=PP_BLE_FRAME_MAX-49;
+            request_put32(j->output,generation);request_put32(j->output+4,revision);
+            request_put32(j->output+8,limit);request_put32(j->output+12,config.max_reply_bytes);
+            memcpy(j->output+16,config.service,16);*j->output_size=32;return PP_BLE_OK;
+        }
+        if(j->size<8 || request_word(p)!=generation || request_word(p+4)!=revision)return PP_BLE_STATE;
+        if(command==PP_BLE_CHANNEL_OPEN){
+            if(j->size!=8)return PP_BLE_INVALID;
+            /* An authentication boundary must reach the legacy adapter before
+             * accepting the new channel's first BEGIN; otherwise a delayed
+             * CONNECTED event could cancel a freshly admitted transaction. */
+            app_ble_event_v2_t boundary;
+            while(app_ble_take(generation,&boundary))
+                if(app_runtime_ble(&boundary)!=APP_OK)return PP_BLE_STORAGE;
+            uint32_t sid=0;int r=app_channel_connect(generation,revision,j->generation,&sid);
+            if(r)return r==APP_CHANNEL_BUSY?PP_BLE_BUSY:PP_BLE_STATE;
+            request_put32(j->output,sid);*j->output_size=4;return PP_BLE_OK;
+        }
+        if(j->size<12)return PP_BLE_INVALID;
+        uint32_t sid=request_word(p+8);
+        app_channel_info_v23_t info={.size=sizeof(info)};
+        if(app_channel_info(generation,&info)!=APP_CHANNEL_OK || !sid || sid!=info.session)return PP_BLE_STATE;
+        if(command==PP_BLE_CHANNEL_CLOSE){
+            if(j->size!=12)return PP_BLE_INVALID;
+            app_channel_disconnect(j->generation);return PP_BLE_OK;
+        }
+        if(command!=PP_BLE_CHANNEL_EXCHANGE || j->size<=12 || j->size>PP_BLE_FRAME_MAX-37)return PP_BLE_INVALID;
+        int r=app_channel_receive(generation,revision,sid,p+12,j->size-12);
+        if(r)return r==APP_CHANNEL_AGAIN?PP_BLE_BUSY:r==APP_ERR_ARGUMENT?PP_BLE_INVALID:PP_BLE_STATE;
+        app_channel_event_v23_t event;
+        if(!app_channel_take(generation,&event) || app_runtime_channel(&event)!=APP_OK)return PP_BLE_STORAGE;
+        uint32_t bytes=0;r=app_channel_transmit(generation,sid,j->output,APP_CHANNEL_MAX_REPLY,&bytes);
+        if(r)return PP_BLE_STATE;
+        *j->output_size=bytes;return PP_BLE_OK;
     }
     case BLE_FLUSH: {
         if(j->generation!=app_runtime_generation())return ESP_ERR_INVALID_STATE;
@@ -239,8 +285,21 @@ static void run(void *unused) {
     for(;;) {
         job_t j;
         if(xQueueReceive(jobs,&j,pdMS_TO_TICKS(20))==pdTRUE) {
+            bool data_job=j.op==BLE_REQUEST || j.op==BLE_FLUSH || j.op==CHANNEL_REQUEST;
+            uint32_t before_generation=app_runtime_generation(),before_revision=0,after_revision=0;
+            bool before_ready=app_runtime_ready();
+            int before_result=last_result;
+            (void)app_ble_schema(NULL,NULL,&before_revision);
             phase=j.op==RENDER?"display":j.op==SELECT||j.op==NEXT||j.op==ROLLBACK?"switching":"management";
-            update_snapshot();int result=atomic_load(&reset_pending)?(j.op==BLE_REQUEST?PP_BLE_STATE:ESP_ERR_INVALID_STATE):execute(&j);last_result=result;phase=photoframe_plugin_is_ready()?"idle":"fault";update_snapshot();
+            if(!data_job)update_snapshot();
+            int result=atomic_load(&reset_pending)?(j.op==BLE_REQUEST||j.op==CHANNEL_REQUEST?PP_BLE_STATE:ESP_ERR_INVALID_STATE):execute(&j);
+            last_result=result;phase=photoframe_plugin_is_ready()?"idle":"fault";
+            (void)app_ble_schema(NULL,NULL,&after_revision);
+            /* Ordinary data/receipt traffic cannot change catalog metadata.
+             * Preserve publication on faults, service/runtime changes and draws. */
+            if(!data_job || result!=0 || result!=before_result || before_generation!=app_runtime_generation() ||
+               before_ready!=app_runtime_ready() || before_revision!=after_revision || app_runtime_last_display())
+                update_snapshot();
             if(j.done){*j.result=result;xSemaphoreGive(j.done);}else app_manager_release();
         } else if(xSemaphoreTake(admission,0)==pdTRUE) {
             uint32_t resetting=atomic_load(&reset_pending);
@@ -271,9 +330,14 @@ static void run(void *unused) {
             bool ble=!network&&!tick&&app_ble_take(app_runtime_generation(),&ble_event);
             app_coc_event_v22_t coc_event;
             bool coc=!network&&!tick&&!ble&&app_coc_take(app_runtime_generation(),&coc_event);
-            if(!network&&!tick&&!ble&&!coc){xSemaphoreGive(admission);continue;}
+            app_channel_event_v23_t channel_event;
+            bool channel=!network&&!tick&&!ble&&!coc&&app_channel_take(app_runtime_generation(),&channel_event);
+            if(!network&&!tick&&!ble&&!coc&&!channel){xSemaphoreGive(admission);continue;}
             atomic_store(&busy,true);atomic_fetch_add(&epoch,1);
             bool event=false;
+            int prior_result=last_result;bool prior_ready=app_runtime_ready();
+            uint32_t prior_generation=app_runtime_generation(),prior_ble=0,prior_channel=0;
+            (void)app_ble_schema(NULL,NULL,&prior_ble);(void)app_channel_schema(NULL,NULL,&prior_channel);
             if(network) {
                 app_services_network(atomic_load(&network_value));
                 /* A faulted/absent app has no NETWORK entry to invoke. Keep
@@ -288,12 +352,15 @@ static void run(void *unused) {
             if(tick) {phase="timer";last_result=app_runtime_event(APP_EVENT_TIMER,timer);event=true;}
             if(ble) {phase="ble";last_result=app_runtime_ble(&ble_event);event=true;}
             if(coc) {phase="coc";last_result=app_runtime_coc(&coc_event);event=true;}
+            if(channel) {phase="channel";last_result=app_runtime_channel(&channel_event);event=true;}
             if(event){
                 phase=photoframe_plugin_is_ready()?"idle":"fault";
-                /* Catalog snapshots read ELF manifests from Flash. A bulk-data
-                 * readiness event must not rescan every slot for every batch. */
-                if(!coc || (coc_event.type&(APP_COC_CONNECTED|APP_COC_DISCONNECTED|APP_COC_ERROR)) ||
-                   last_result!=APP_OK || app_runtime_last_display())update_snapshot();
+                uint32_t next_ble=0,next_channel=0;
+                (void)app_ble_schema(NULL,NULL,&next_ble);(void)app_channel_schema(NULL,NULL,&next_channel);
+                /* Successful timer and bulk events update RAM state only.
+                 * Publish metadata on boundaries, failures or actual changes. */
+                if((network||ble) || (coc&&(coc_event.type&(APP_COC_CONNECTED|APP_COC_DISCONNECTED|APP_COC_ERROR))) || (channel&&(channel_event.type&(APP_CHANNEL_CONNECTED|APP_CHANNEL_DISCONNECTED|APP_CHANNEL_ERROR))) ||
+                   last_result!=APP_OK || last_result!=prior_result || prior_ready!=app_runtime_ready() || prior_generation!=app_runtime_generation() || prior_ble!=next_ble || prior_channel!=next_channel || app_runtime_last_display())update_snapshot();
             }
             app_manager_release();
         }
@@ -355,4 +422,8 @@ esp_err_t app_manager_start(void) {
     if(xTaskCreate(run,"app_manager",32768,NULL,5,&worker)!=pdPASS)return ESP_ERR_NO_MEM;
     if(xTaskCreate(button_task,"app_button",3072,NULL,4,NULL)!=pdPASS)return ESP_ERR_NO_MEM;
     return ESP_OK;
+}
+
+int app_manager_channel_request_authorized(uint8_t op,const uint8_t *p,size_t n,uint8_t *out,size_t *size,uint32_t peer,uint32_t authority){
+    return invoke((job_t){.op=CHANNEL_REQUEST,.command=op,.data=p,.size=n,.output=out,.output_size=size,.generation=peer,.authorization_epoch=authority});
 }

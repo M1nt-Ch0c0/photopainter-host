@@ -34,6 +34,12 @@ static int app(uint8_t op,const uint8_t *p,size_t n,uint8_t *out,size_t *size) {
     assert(busy && (op==PP_BLE_APP_READ || op==PP_BLE_APP_WRITE) && n>=12 && pp_ble_u32(p)==1);
     memcpy(out,"echo",4);*size=4;app_operations++;return 0;
 }
+static unsigned channel_operations;
+static int channel(uint8_t op,const uint8_t *p,size_t n,uint8_t *out,size_t *size){
+    assert(busy && op==PP_BLE_CHANNEL_EXCHANGE && n==PP_BLE_FRAME_MAX-37);
+    assert(p[0]==0x42 && p[n-1]==0xa7);channel_operations++;
+    memcpy(out,"consumed",8);*size=8;return PP_BLE_OK;
+}
 static pp_ble_images images;
 static unsigned renders;
 static int render_result,ready_result;
@@ -45,7 +51,7 @@ static int render_image(const uint8_t *p,size_t n) {
     return render_result;
 }
 static const pp_ble_ops ops={.acquire=acquire,.release=release,.alloc=allocate,.free=dispose,
-    .stage=stage,.manage=manage,.status=status,.app=app,.images=&images,
+    .stage=stage,.manage=manage,.status=status,.app=app,.channel=channel,.images=&images,
     .image_ready=image_ready,.render=render_image};
 static pp_ble_session session;
 static uint8_t client_key[32],out[512];
@@ -71,7 +77,7 @@ static void auth(void) {
     assert(!memcmp(tag,out+27,32));
 }
 static int request(uint8_t op,const void *data,size_t n) {
-    uint8_t p[512]={op};pp_ble_put32(p+1,++seq);
+    uint8_t p[PP_BLE_FRAME_MAX]={op};pp_ble_put32(p+1,++seq);
     if(n) memcpy(p+5,data,n);
     assert(n+37<=sizeof(p));
     assert(pp_ble_tag(client_key,32,"pp-ble-v1/request",p,n+5,p+n+5));
@@ -183,7 +189,7 @@ static void test_fragments(void) {
     p[0]=0;assert(pp_ble_fragment(&f,p,20)==0);
     p[0]=16;assert(pp_ble_fragment(&f,p,20)==0);
     p[0]=32;assert(pp_ble_fragment(&f,p,7)==1 && f.received==35);
-    p[0]=0;p[2]=1;p[3]=2;assert(pp_ble_fragment(&f,p,7)==-1); /* 513 */
+    p[0]=0;p[2]=1;p[3]=16;assert(pp_ble_fragment(&f,p,7)==-1); /* 4097 */
     assert(pp_ble_fragment(&f,p,4)==-1);
 }
 static void test_images(void) {
@@ -239,9 +245,32 @@ static void test_images(void) {
     boot[0]++;pp_ble_images_init(&images,boot);
     assert(request(PP_BLE_IMAGE_RESULT,p,32)==PP_BLE_BOOT_CHANGED && !busy && !allocations);
 }
+static void test_large_channel(void){
+    open_session();auth();uint8_t data[PP_BLE_FRAME_MAX-37];memset(data,0x42,sizeof(data));data[sizeof(data)-1]=0xa7;
+    assert(request(PP_BLE_CHANNEL_EXCHANGE,data,sizeof(data))==PP_BLE_OK && channel_operations==1);
+    assert(response_size==47 && !memcmp(out+7,"consumed",8));
+    /* Entire 4-KiB request, including its final byte, is authenticated. */
+    uint8_t p[PP_BLE_FRAME_MAX]={PP_BLE_CHANNEL_EXCHANGE};pp_ble_put32(p+1,seq+1);memcpy(p+5,data,sizeof(data));
+    assert(pp_ble_tag(client_key,32,"pp-ble-v1/request",p,sizeof(p)-32,p+sizeof(p)-32));p[sizeof(p)-33]^=1;
+    assert(pp_ble_request(&session,token,info,p,sizeof(p),now,out)==7 && channel_operations==1);
+    p[sizeof(p)-33]^=1;p[0]=PP_BLE_APP_WRITE;
+    assert(pp_ble_tag(client_key,32,"pp-ble-v1/request",p,sizeof(p)-32,p+sizeof(p)-32));
+    assert(pp_ble_request(&session,token,info,p,sizeof(p),now,out)==7 && channel_operations==1);
+    p[0]=PP_BLE_CHANNEL_EXCHANGE;
+    assert(pp_ble_tag(client_key,32,"pp-ble-v1/request",p,sizeof(p)-32,p+sizeof(p)-32));
+    pp_ble_fragments fragments={0};uint8_t part[244];
+    for(unsigned off=0;off<sizeof(p);){
+        unsigned n=sizeof(p)-off;if(n>sizeof(part)-4)n=sizeof(part)-4;
+        part[0]=(uint8_t)off;part[1]=(uint8_t)(off>>8);part[2]=0;part[3]=16;
+        memcpy(part+4,p+off,n);int complete=pp_ble_fragment(&fragments,part,n+4);off+=n;
+        assert(complete==(off==sizeof(p)));
+    }
+    assert(!memcmp(fragments.data,p,sizeof(p)));
+    assert(pp_ble_request(&session,token,info,fragments.data,fragments.total,now,out)==47&&channel_operations==2);
+}
 int main(void) {
     for(size_t i=0;i<sizeof(package);i++) package[i]=(uint8_t)i;
-    test_auth();test_transfer();test_status_and_bounds();test_fragments();test_images();
+    test_auth();test_transfer();test_status_and_bounds();test_fragments();test_images();test_large_channel();
     pp_ble_close(&session);assert(!busy && !allocations && releases>5);
     return 0;
 }

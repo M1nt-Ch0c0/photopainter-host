@@ -15,6 +15,8 @@ typedef struct {
 static record_t record;
 static nvs_handle_t handle;
 static bool opened;
+static const char *diagnostic="not_started";
+const char *app_boot_diagnostic(void){return diagnostic;}
 static uint32_t checksum(const record_t *r) {
     const uint8_t *p=(const uint8_t *)r;uint32_t v=2166136261u;
     for(size_t i=0;i<sizeof(*r)-4;i++)v=(v^p[i])*16777619u;
@@ -32,6 +34,7 @@ static bool identity(void) {
 }
 esp_err_t app_boot_complete(void) {
     if(!opened)return ESP_ERR_INVALID_STATE;
+    diagnostic="complete_journal";
     memset(&record,0,sizeof(record));record.magic=0x32425452;
     return write_record();
 }
@@ -48,23 +51,35 @@ esp_err_t app_boot_fallback(void) {
     record.phase=3;
     return write_record();
 }
-esp_err_t app_boot_prepare(void) {
-    opened=false;
+esp_err_t app_boot_prepare(bool usb_maintenance_reset) {
+    opened=false;diagnostic="catalog_not_ready";
     const app_catalog_t *c=app_catalog_get();
     if(!c||c->trial_app>=0||c->selected<0)return ESP_ERR_INVALID_STATE;
+    diagnostic="open_journal";
     esp_err_t e=nvs_open_from_partition("elf_state","runtime",NVS_READWRITE,&handle);
     if(e!=ESP_OK)return e;
     opened=true;size_t size=sizeof(record);
     e=nvs_get_blob(handle,"runtime_boot",&record,&size);
+    diagnostic="invalid_journal";
     if(e!=ESP_ERR_NVS_NOT_FOUND && (e!=ESP_OK||size!=sizeof(record)||
         record.magic!=0x32425452||record.checksum!=checksum(&record)||record.phase>3))
         return ESP_ERR_INVALID_STATE;
     if(e==ESP_OK&&record.phase) {
+        diagnostic=record.phase==3?"fallback_exhausted":"interrupted_boot_identity";
         if(!identity()||record.active<0||record.active>1||record.previous < -1||
-            record.previous>1||record.previous==record.active||record.phase==3)
+            record.previous>1||record.previous==record.active)
             return ESP_ERR_INVALID_STATE;
-        return app_boot_fallback();
+        if(!usb_maintenance_reset) {
+            if(record.phase==3)return ESP_ERR_INVALID_STATE;
+            diagnostic="fallback_attempt";
+            return app_boot_fallback();
+        }
+        /* A physical USB maintenance reset is not evidence that START crashed.
+         * Re-arm the currently selected image, preserving the catalog and all
+         * checksum/identity validation above. A subsequent abnormal reset still
+         * consumes the normal single fallback and cannot loop indefinitely. */
     }
+    diagnostic=usb_maintenance_reset?"usb_maintenance_attempt":"active_attempt";
     const app_entry_t *a=&c->apps[c->selected];
     record=(record_t){.magic=0x32425452,.phase=1,.bank=c->selected,
         .active=a->slots.active,.previous=a->slots.previous};

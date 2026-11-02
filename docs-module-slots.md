@@ -14,7 +14,7 @@
 
 ## 构建和打包
 
-在固定 IDF 提交 `5e6f53cdb31fe5708eae3f55af9737be2822db22` 与 Registry elf_loader 1.3.3 下独立构建 APP。最小工程见 [Wiki 快速开始](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Quickstart.md)。
+在固定 IDF 提交 `5e6f53cdb31fe5708eae3f55af9737be2822db22` 与 Registry elf_loader 1.3.3 下独立构建 APP。最小工程见 [Wiki 快速开始](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/04-writing-an-app.md)。
 
 ```sh
 # photoframe/examples/lifecycle 中

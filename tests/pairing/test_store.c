@@ -20,7 +20,8 @@ esp_err_t nvs_get_blob(nvs_handle_t h,const char *key,void *data,size_t *bytes){
  assert(h==1&&!strcmp(key,"owner"));
  if(crc_bad){key_exists=false;crc_bad=false;return ESP_ERR_NVS_NOT_FOUND;}
  if(!key_exists)return ESP_ERR_NVS_NOT_FOUND;
- if(*bytes<record_bytes)return ESP_ERR_INVALID_SIZE;*bytes=record_bytes;memcpy(data,record,record_bytes);return ESP_OK;
+ if(*bytes<record_bytes)return ESP_ERR_INVALID_SIZE;
+ *bytes=record_bytes;memcpy(data,record,record_bytes);return ESP_OK;
 }
 int main(void){
  pp_pair_binding owner={0},loaded;bool bound=true;

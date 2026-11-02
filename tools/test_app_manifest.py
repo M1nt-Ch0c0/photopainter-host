@@ -29,7 +29,7 @@ class ManifestTests(unittest.TestCase):
     def test_unknown_abi_capabilities_reserved_and_nonterminated_strings(self):
         p=minimal_elf("clock");off=struct.unpack_from("<I",p,32)[0]
         m=struct.unpack_from("<I",p,off+6*40+16)[0]
-        cases=[(0,0),(4,127),(8,3),(12,3),(16,2),(20,2),(120,1),(124,1)]
+        cases=[(0,0),(4,127),(8,3),(12,4),(16,2),(20,2),(120,1),(124,1)]
         for offset,value in cases:
             b=bytearray(p);struct.pack_into("<I",b,m+offset,value)
             self.assertFalse(self.valid(bytes(b)))
@@ -67,3 +67,12 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(manifest(bytes(b))["minor"],1)
             self.assertEqual(struct.unpack_from("<II",package_elf(bytes(b),1),4),(2,2))
         self.assertTrue(self.valid(minimal_elf("old-app",imports="app_host_timer_v2")))
+
+    def test_channel_imports_require_minor_three(self):
+        for symbol in ("app_host_channel_register_v23","app_host_channel_info_v23","app_host_channel_recv_v23","app_host_channel_send_v23","app_host_channel_close_v23"):
+            for minor in range(4):
+                p=minimal_elf("channel",imports=symbol,minor=minor)
+                self.assertEqual(self.valid(p),minor==3)
+                if minor==3:self.assertEqual(manifest(p)["minor"],3)
+                else:
+                    with self.assertRaises(ValueError):manifest(p)

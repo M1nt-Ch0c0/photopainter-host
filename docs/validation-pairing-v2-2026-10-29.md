@@ -2,7 +2,7 @@
 
 **尚未实机验证。** 本页记录源码与构建证据；实际刷写、按键和实体显示证据由主流程追加，
 不能从这里推断设备已经更新。测试时源码为基线 `be664989697e` 加本轮改动；
-最终 main 提交及提交后重建产物见[早上验收清单](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/MORNING-ACCEPTANCE.md)和外部 manifest。
+最终 main 提交及提交后重建产物见[早上验收清单](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-status.md)和外部 manifest。
 
 ## 实现范围
 

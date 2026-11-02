@@ -9,6 +9,7 @@ idf_component_register(
         "app_services.c"
         "app_ble.c"
         "app_coc.c"
+        "app_channel.c"
         "ble_coc.c"
         "app_manager.c"
         "app_button.c"

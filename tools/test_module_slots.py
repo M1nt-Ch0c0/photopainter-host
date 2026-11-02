@@ -51,6 +51,7 @@ class SlotTests(unittest.TestCase):
         ]
         subprocess.run(args, check=True)
         cls.lib = ctypes.CDLL(str(out))
+        cls.lib.app_boot_prepare.argtypes = [ctypes.c_bool]
         cls.lib.module_slots_state.restype = State
         cls.lib.module_slots_stage.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
         cls.lib.app_catalog_get.restype = ctypes.POINTER(Catalog)
@@ -340,34 +341,79 @@ class SlotTests(unittest.TestCase):
 
     def test_boot_active_interruption_fallback_interruption_stays_fault(self):
         self.boot_baseline()
-        self.assertEqual(self.lib.app_boot_prepare(),0)  # active START intent
+        self.assertEqual(self.lib.app_boot_prepare(False),0)  # active START intent
         self.assertEqual(self.lib.module_slots_init(),0) # reset
-        self.assertEqual(self.lib.app_boot_prepare(),0)  # fallback START intent
+        self.assertEqual(self.lib.app_boot_prepare(False),0)  # fallback START intent
         self.assertEqual(self.state(),(1,-1,-1,0))
         for _ in range(3):
             self.assertEqual(self.lib.module_slots_init(),0)
-            self.assertNotEqual(self.lib.app_boot_prepare(),0)
+            self.assertNotEqual(self.lib.app_boot_prepare(False),0)
+            self.lib.app_boot_diagnostic.restype = ctypes.c_char_p
+            self.assertEqual(self.lib.app_boot_diagnostic(), b"fallback_exhausted")
             self.assertEqual(self.state(),(1,-1,-1,0))
+
+    def test_usb_maintenance_retry_keeps_active_slot_without_fallback(self):
+        self.lib.mock_legacy(1,-1,-1,0)
+        self.assertEqual(self.lib.module_slots_init(),0)
+        self.assertEqual(self.lib.app_boot_prepare(False),0)
+        self.assertEqual(self.lib.module_slots_init(),0)
+        self.assertNotEqual(self.lib.app_boot_prepare(False),0)
+        self.assertEqual(self.lib.app_boot_prepare(True),0)
+        self.assertEqual(self.state(),(1,-1,-1,0))
+        self.assertEqual(self.lib.app_boot_complete(),0)
+
+    def test_usb_retry_after_exhausted_fallback_remains_bounded_on_abnormal_reset(self):
+        self.boot_baseline()
+        self.assertEqual(self.lib.app_boot_prepare(False),0)
+        self.assertEqual(self.lib.module_slots_init(),0)
+        self.assertEqual(self.lib.app_boot_prepare(False),0)
+        self.assertEqual(self.state(),(1,-1,-1,0))
+        self.assertEqual(self.lib.module_slots_init(),0)
+        self.assertNotEqual(self.lib.app_boot_prepare(False),0)
+        self.assertEqual(self.lib.app_boot_prepare(True),0)
+        self.assertEqual(self.state(),(1,-1,-1,0))
+        self.assertEqual(self.lib.module_slots_init(),0)
+        for _ in range(3):
+            self.assertNotEqual(self.lib.app_boot_prepare(False),0)
+            self.assertEqual(self.state(),(1,-1,-1,0))
+
+    def test_usb_retry_rejects_corrupt_journal(self):
+        self.boot_baseline()
+        self.assertEqual(self.lib.app_boot_prepare(False),0)
+        self.lib.mock_corrupt_boot()
+        self.assertEqual(self.lib.module_slots_init(),0)
+        self.assertNotEqual(self.lib.app_boot_prepare(True),0)
+        self.assertEqual(self.state(),(0,1,-1,0))
+
+    def test_usb_retry_commit_failure_keeps_old_protection(self):
+        self.lib.mock_legacy(1,-1,-1,0)
+        self.assertEqual(self.lib.module_slots_init(),0)
+        self.assertEqual(self.lib.app_boot_prepare(False),0)
+        self.lib.mock_fail_commit(1)
+        self.assertNotEqual(self.lib.app_boot_prepare(True),0)
+        self.assertEqual(self.lib.module_slots_init(),0)
+        self.assertNotEqual(self.lib.app_boot_prepare(False),0)
+        self.assertEqual(self.state(),(1,-1,-1,0))
 
     def test_boot_commit_failure_never_enters_unprotected_call(self):
         self.boot_baseline();self.lib.mock_fail_commit(1)
-        self.assertNotEqual(self.lib.app_boot_prepare(),0)
+        self.assertNotEqual(self.lib.app_boot_prepare(False),0)
         self.assertEqual(self.lib.module_slots_init(),0)
-        self.assertEqual(self.lib.app_boot_prepare(),0)
+        self.assertEqual(self.lib.app_boot_prepare(False),0)
 
     def test_boot_fallback_intent_survives_each_commit_boundary(self):
         for commit in (1,2,3):
             with self.subTest(commit=commit):
                 self.setUp();self.boot_baseline()
-                self.assertEqual(self.lib.app_boot_prepare(),0)
+                self.assertEqual(self.lib.app_boot_prepare(False),0)
                 self.lib.mock_fail_commit(commit)
                 self.assertNotEqual(self.lib.app_boot_fallback(),0)
                 self.assertEqual(self.lib.module_slots_init(),0)
-                self.assertEqual(self.lib.app_boot_prepare(),0)
+                self.assertEqual(self.lib.app_boot_prepare(False),0)
                 self.assertEqual(self.state(),(1,-1,-1,0))
                 self.assertEqual(self.lib.app_boot_complete(),0)
                 self.assertEqual(self.lib.module_slots_init(),0)
-                self.assertEqual(self.lib.app_boot_prepare(),0)
+                self.assertEqual(self.lib.app_boot_prepare(False),0)
 
     def test_boot_guard_and_cancelled_switch_trial_keep_original_identity(self):
         self.boot_baseline()
@@ -375,7 +421,7 @@ class SlotTests(unittest.TestCase):
         self.assertEqual(self.lib.app_catalog_begin(1,True),0)
         self.assertEqual(self.lib.module_slots_init(),0)
         self.assertEqual(self.catalog().selected,0)
-        self.assertEqual(self.lib.app_boot_prepare(),0)
+        self.assertEqual(self.lib.app_boot_prepare(False),0)
 
 
 if __name__ == "__main__":

@@ -169,3 +169,16 @@ binding change, they must not recover or redraw an earlier owner's transaction.
 Pairing establishes authenticated ownership and fresh signed sessions. Existing
 GATT/CoC image payloads retain their previous wire format: authentication and
 integrity are provided, but this protocol does not claim radio confidentiality.
+
+### Connection-local GATT write capacity
+
+The host exposes read-only characteristic `7b9d0006-6c82-4f31-9a48-6f5061696e74`.
+Its three-byte value is `version:u8=1, write_capacity:u16le`, where capacity is
+`min(512, negotiated_ATT_MTU - 3)`, including the four-byte fragment header.
+The browser reads it before each exchange, validates a 20..512 byte capacity,
+and splits requests into `capacity - 4` byte payloads. MTU 247 therefore allows
+240 payload bytes per acknowledged write; MTU 23 retains 16. The updated browser
+requires this characteristic; deploy the matching host before updating the plugin.
+The APP ABI remains limited to 128-byte values (106 image bytes per CHUNK).
+No authentication, application ABI, completion or retry semantics change.
+This optimization has not been hardware-validated.

@@ -1,6 +1,6 @@
 # PhotoPainter implementation architecture
 
-Canonical current contracts: [ABI 2 runtime](../../../../docs-runtime-v2.md), [five-bank storage and Wi-Fi](../../../../docs-multi-apps.md), and [reader-facing diagrams](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/ARCHITECTURE.md).
+Canonical current contracts: [ABI 2 runtime](../../../../docs-runtime-v2.md), [five-bank storage and Wi-Fi](../../../../docs-multi-apps.md), and [reader-facing diagrams](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/01-overview.md).
 
 Pairing v2 source is implemented but **尚未实机验证 / not hardware-validated**.
 Use [the pairing contract](../../../../docs/ble-pairing-v2.md) for current authentication;
@@ -26,4 +26,4 @@ PNG generation and decoding preserve opaque exact black/white/yellow/red/blue/gr
 
 Wi-Fi JSON authority and atomic .tmp/.bak migration/save are unchanged. No app receives pairing keys, Wi-Fi credentials or host usage keys. Runtime cache is optional RAM, not SD persistence. No device WebUI, whole-firmware OTA, background app tasks or new public service is added. The CPM browser plugin uses CPA's existing resources and a shared Go/WASM engine; its negotiated browser relationship and the native client's relationship are independent owners, transferred through physical reset.
 
-The framework/application boundary and current API guide are maintained in the [developer Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/wiki/Home.md). The current image route is app-owned: photoframe v20 uses ABI 2.2 single-owner CoC, while its ABI 2.1 GATT route remains compatible. A real Mac CoC transfer and physical completion receipt were recorded on 2026-10-27. The older host-specific image path remains compatibility code. Keep framework entry documentation about generic services and app management; business input/sending commands belong to app/client guides.
+The framework/application boundary and current API guide are maintained in the [developer Wiki](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/README.md). The current image route is app-owned: photoframe v20 uses ABI 2.2 single-owner CoC, while its ABI 2.1 GATT route remains compatible. A real Mac CoC transfer and physical completion receipt were recorded on 2026-10-27. The older host-specific image path remains compatibility code. Keep framework entry documentation about generic services and app management; business input/sending commands belong to app/client guides.

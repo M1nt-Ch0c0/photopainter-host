@@ -191,6 +191,13 @@ static int operation(pp_ble_session *s,uint8_t op,const uint8_t *p,size_t n,
         int result=s->ops->manage(op,(const char *)p);
         s->ops->release();return result;
     }
+    case PP_BLE_CHANNEL_INFO: case PP_BLE_CHANNEL_OPEN:
+    case PP_BLE_CHANNEL_EXCHANGE: case PP_BLE_CHANNEL_CLOSE: {
+        if(!s->ops->channel)return PP_BLE_STATE;
+        if(s->held || !s->ops->acquire())return PP_BLE_BUSY;
+        int result=s->ops->channel(op,p,n,out,length);
+        s->ops->release();return result;
+    }
     case PP_BLE_APP_READ: case PP_BLE_APP_WRITE: {
         if(!s->ops->app || n<12 || n>140 || (op==PP_BLE_APP_READ && n!=12))return PP_BLE_INVALID;
         if(s->held || !s->ops->acquire())return PP_BLE_BUSY;
@@ -220,7 +227,7 @@ size_t pp_ble_request(pp_ble_session *s,const char *token,const uint8_t info[20]
         memcpy(out+7,info,20);length=20;result=PP_BLE_OK;
     } else {
         uint8_t tag[32];
-        if(size<37 || size>512 || !s->authenticated) goto reply;
+        if(size<37 || (size>512 && (op!=PP_BLE_CHANNEL_EXCHANGE || size>PP_BLE_FRAME_MAX)) || !s->authenticated) goto reply;
         sequence=pp_ble_u32(request+1);
         if(s->sequence==UINT32_MAX || sequence!=s->sequence+1 ||
            !pp_ble_tag(s->key,32,"pp-ble-v1/request",request,size-32,tag) ||
@@ -242,7 +249,7 @@ int pp_ble_fragment(pp_ble_fragments *f,const uint8_t *p,size_t n) {
     if(n<5 || n>512) goto invalid;
     unsigned offset=p[0]|(unsigned)p[1]<<8,total=p[2]|(unsigned)p[3]<<8;
     size_t count=n-4;
-    if(!total || total>512 || offset>total || count>total-offset) goto invalid;
+    if(!total || total>PP_BLE_FRAME_MAX || offset>total || count>total-offset) goto invalid;
     if(!offset && (!f->received || f->total!=total)) {f->received=0;f->total=(uint16_t)total;}
     if(total!=f->total || offset>f->received) goto invalid;
     if(offset<f->received) {

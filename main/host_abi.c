@@ -65,6 +65,11 @@ extern int app_host_coc_info_v22;
 extern int app_host_coc_recv_v22;
 extern int app_host_coc_send_v22;
 extern int app_host_coc_close_v22;
+extern int app_host_channel_register_v23;
+extern int app_host_channel_info_v23;
+extern int app_host_channel_recv_v23;
+extern int app_host_channel_send_v23;
+extern int app_host_channel_close_v23;
 #pragma GCC diagnostic pop
 esp_elf_symbol_table_t g_esp_photoframe_elfsyms[] = {
     ESP_ELFSYM_EXPORT(longjmp),
@@ -130,4 +135,9 @@ esp_elf_symbol_table_t g_esp_photoframe_elfsyms[] = {
     ESP_ELFSYM_EXPORT(app_host_coc_recv_v22),
     ESP_ELFSYM_EXPORT(app_host_coc_send_v22),
     ESP_ELFSYM_EXPORT(app_host_coc_close_v22),
+    ESP_ELFSYM_EXPORT(app_host_channel_register_v23),
+    ESP_ELFSYM_EXPORT(app_host_channel_info_v23),
+    ESP_ELFSYM_EXPORT(app_host_channel_recv_v23),
+    ESP_ELFSYM_EXPORT(app_host_channel_send_v23),
+    ESP_ELFSYM_EXPORT(app_host_channel_close_v23),
     ESP_ELFSYM_END};

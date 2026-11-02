@@ -7,7 +7,7 @@ description: Bootstrap, build, deploy, continue development, and diagnose the ES
 
 Treat `photopainter-host`, `photoframe`, `ai-quota-frame`, and the independent `photopainter-console` as one deployed system with separate repositories; `esp32s3` owns the shared Wiki. Preserve their boundaries and validate the complete path from source to physical display.
 
-Current source uses physical pairing v2 and ABI 2.2; **尚未实机验证 / not hardware-validated**. Discovery, physical confirmation, negotiated owner storage and reset belong to the host. The client keeps the derived relationship; no fixed device push token is needed. Old BLE op 1 is rejected and old HTTP control routes return 410. Historical v1 documents are not current setup instructions. The browser plugin reuses the Go data/render engine and is an independent client/owner, not a proxy through the native daemon.
+Current source uses physical pairing v2 and ABI 2.3, preserving ABI 2.2 CoC. Phone Web GATT with saved-bond authentication, photoframe v21 and plugin 0.3.1 has a matching completion receipt and user visual confirmation. Fresh-pair/reset and all-platform acceptance are not inferred from that scoped result. Discovery, physical confirmation, negotiated owner storage and reset belong to the host. The client keeps the derived relationship; no fixed device push token is needed. Old BLE op 1 is rejected and old HTTP control routes return 410. Historical v1 documents are not current setup instructions. The browser plugin reuses the Go data/render engine and is an independent client/owner, not a proxy through the native daemon.
 
 ## Start every task
 
