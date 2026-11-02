@@ -197,6 +197,7 @@ static int operation(pp_ble_session *s,uint8_t op,const uint8_t *p,size_t n,
         int result=s->ops->app(op,p,n,out,length);
         s->ops->release();return result;
     }
+    case PP_BLE_SHELL:return pp_ble_shell_request(&s->shell,s->ops->shell,info,p,n,out,length);
     default:return PP_BLE_INVALID;
     }
 }

@@ -16,6 +16,8 @@ idf_component_register(
         "host_abi.c"
         "push_server.c"
         "ble_protocol.c"
+        "ble_shell.c"
+        "host_shell.c"
         "ble_crypto.c"
         "ble_transport.c"
         "pairing.c"
@@ -35,6 +37,7 @@ idf_component_register(
         esp_http_server
         esp_netif
         esp_timer
+        esp_app_format
         esp_wifi
         fatfs
         sdmmc

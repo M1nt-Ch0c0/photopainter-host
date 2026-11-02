@@ -23,7 +23,7 @@ class PairingTests(unittest.TestCase):
             flags=['-I'+str(ssl/'include'),'-L'+str(ssl/'lib')] if ssl.exists() else []
             binary=folder/'pairing'
             subprocess.run(['cc','-Wall','-Wextra','-Werror','-Wno-deprecated-declarations','-fsanitize=address,undefined','-g',
-                '-I'+str(ROOT/'main'),'-I'+str(ROOT/'components/photopainter_board/include'),'-I'+str(folder),str(ROOT/'main/ble_protocol.c'),str(ROOT/'main/pairing.c'),str(ROOT/'main/pairing_screen.c'),
+                '-I'+str(ROOT/'main'),'-I'+str(ROOT/'components/photopainter_board/include'),'-I'+str(folder),str(ROOT/'main/ble_protocol.c'),str(ROOT/'main/ble_shell.c'),str(ROOT/'main/pairing.c'),str(ROOT/'main/pairing_screen.c'),
                 str(ROOT/'tests/ble/test_pairing.c'),'-lcrypto','-o',str(binary),*flags],check=True)
             subprocess.run([str(binary)],check=True)
 
@@ -42,6 +42,6 @@ class PairingTests(unittest.TestCase):
             flags=['-I'+str(ssl/'include'),'-L'+str(ssl/'lib')] if ssl.exists() else []
             subprocess.run(['cc','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
                 '-I'+str(ROOT/'tests/slots/include'),'-I'+str(ROOT/'main'),
-                str(ROOT/'main/ble_protocol.c'),str(ROOT/'main/pairing.c'),str(ROOT/'main/pairing_store.c'),
+                str(ROOT/'main/ble_protocol.c'),str(ROOT/'main/ble_shell.c'),str(ROOT/'main/pairing.c'),str(ROOT/'main/pairing_store.c'),
                 str(ROOT/'tests/pairing/test_store.c'),'-lcrypto','-o',str(binary),*flags],check=True)
             subprocess.run([str(binary)],check=True)

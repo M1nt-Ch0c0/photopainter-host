@@ -157,6 +157,7 @@ then NUL padding. Package bytes are exactly `tools/module.py package` output.
 | 12 | Remove | `app_id:32` | Empty |
 | 13 | Application characteristic read (ABI 2.1) | `generation:u32, service_revision:u32, index:u32` | Value, at most 128 bytes |
 | 14 | Application characteristic write (ABI 2.1) | Same 12-byte target, then value (0–128 bytes) | Empty, after application event completion |
+| 28 | Read-only shell (additive, see below) | `offset:u32`, then command bytes only when offset is 0 | `total:u32, offset:u32, exit:u8, flags:u8, output page` (up to 400 bytes) |
 
 Authenticated status includes live `uptime_ms` and the pinned IDF's numeric
 `reset_reason`, sampled with heap counters. Useful reasons are 1 power-on,
@@ -204,6 +205,44 @@ old transport before clearing the owner; queued work rechecks its authorization
 epoch before side effects. v2 HTTP control returns 410. Successful staging never
 activates an app.
 
+## Read-only shell (op 28, additive)
+
+**尚未实机验证 / not hardware-validated.** A signed diagnostic command channel
+for the authenticated owner. It never mutates state, reboots, or prints tokens,
+bond keys, Wi-Fi passwords or management keys.
+
+- `offset=0`: the rest of the payload is the command, 1–256 bytes of well-formed
+  UTF-8 with no NUL or control characters except space/tab. The host splits it
+  into at most 16 whitespace-separated arguments, executes it **once**, captures
+  at most 4095 bytes of text output in this session and returns page 0. Longer
+  output is cut and `flags` bit 0 (truncated) is set.
+- `offset>0`: the command must be empty. Returns the page at `offset` from the
+  most recent capture in this session; it never re-executes. A new connection or
+  session starts with no capture.
+- `exit`: 0 success, 1 command error, 2 usage error (empty command, too many or
+  unexpected arguments), 127 unknown command. A non-zero exit is still a
+  response code 0 with output.
+- `total` may be 0; the reply is then only the 10-byte header.
+- Errors: payload shorter than 4 bytes, invalid command bytes, or command bytes
+  with `offset>0` → 4; `offset>=total` or `offset>0` without a prior capture → 5;
+  firmware without a wired shell → 8. Older firmware answers op 28 with 4
+  (unsupported opcode), which clients use for feature detection.
+
+| Command | Output |
+|---|---|
+| `help` | Command list |
+| `uname`, `version` | Host project/version/build time, supported payload ABI, ESP-IDF, chip revision and cores |
+| `uptime` | Time since boot and numeric reset reason |
+| `free` | Internal heap total/free/min-free/largest block; the same for PSRAM when present |
+| `apps` | Bank, ID, active-slot version, slot, ABI and foreground/selected/trial/pending markers |
+| `ps`, `current` | Foreground application, slot/version, ABI, manager phase, ready/confirmed flags, generation, last switch |
+| `status` | The op 3 STATUS JSON |
+| `wifi` | Discovery-record station state and IPv4 only; no SSID or password |
+
+Commands run on the BLE transport worker, read only the App Manager's published
+status snapshot and heap/system counters, take no admission, and perform no
+Flash, catalog, application or display I/O, so they also answer during an upload.
+
 ## Memory and build
 
 `sdkconfig.defaults` enables NimBLE peripheral only, one connection, MTU 247,
@@ -229,7 +268,7 @@ The partition table must remain byte-identical. After separate hardware
 authorization and verified backups, a framework update writes **only** the
 new host `.bin` at `0x10000`. Do not execute `idf.py flash` for this update.
 
-Protocol vectors/tests: `tests/ble/test_protocol.c`, `tools/test_ble_protocol.py`,
+Protocol vectors/tests: `tests/ble/test_protocol.c`, `tests/ble/test_shell.c`, `tools/test_ble_protocol.py`,
 and the computer repository's `internal/ble/protocol_test.go`. The C tests run
 the production protocol with OpenSSL crypto and ASan/UBSan; firmware uses IDF
 PSA HMAC/SHA. The catalog/runtime recovery tests remain authoritative for A/B.

@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "image_limits.h"
+#include "ble_shell.h"
 
 /* Wire contract is documented in docs/ble-protocol.md. No RTOS or radio here. */
 #define PP_BLE_VERSION 2
@@ -11,6 +12,7 @@
 #define PP_BLE_IDLE_MS 60000u
 #define PP_BLE_SESSION_MS (2u * 60u * 60u * 1000u)
 enum pp_ble_op {
+    PP_BLE_SHELL=28, /* read-only shell; see ble_shell.h */
     PP_BLE_AUTH=1, PP_BLE_INFO=2, PP_BLE_STATUS=3, PP_BLE_BEGIN=4,
     PP_BLE_CHUNK=5, PP_BLE_COMMIT=6, PP_BLE_ABORT=7, PP_BLE_PROGRESS=8,
     PP_BLE_ACTIVATE=9, PP_BLE_SWITCH=10, PP_BLE_ROLLBACK=11, PP_BLE_REMOVE=12,
@@ -50,6 +52,7 @@ typedef struct {
     int (*image_ready)(const char *);
     /* Synchronous: success means physical refresh AND final POWER_OFF done. */
     int (*render)(const uint8_t *,size_t);
+    pp_shell_exec shell; /* NULL: op 28 answers PP_BLE_STATE */
 } pp_ble_ops;
 typedef struct {
     uint8_t nonce[32], key[32], id[6];
@@ -62,6 +65,7 @@ typedef struct {
     uint8_t image_id[16];
     char app[32], snapshot[4096];
     const pp_ble_ops *ops;
+    pp_ble_shell shell;
 } pp_ble_session;
 typedef struct {
     uint8_t data[PP_BLE_FRAME_MAX];

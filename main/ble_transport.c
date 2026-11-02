@@ -2,6 +2,7 @@
  * existing App Manager; neither callback nor worker calls ELF/Flash/display. */
 #include "ble_transport.h"
 #include "ble_protocol.h"
+#include "host_shell.h"
 #include "app_manager.h"
 #include "app_runtime.h"
 #include "app_ble.h"
@@ -322,6 +323,7 @@ static int render_image(const uint8_t *data,size_t size) {
     }
 }
 static const pp_ble_ops operations={
+    .shell=host_shell_exec,
     .acquire=acquire_authorized,.release=app_manager_release,.alloc=allocate_package,
     .free=heap_caps_free,.stage=stage,.manage=manage,.status=app_manager_status,
     .app=app_operation,.images=&image_receipts,.image_ready=image_ready,.render=render_image,
