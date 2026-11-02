@@ -1,6 +1,6 @@
 # PhotoPainter Host 应用框架
 
-当前宿主提供 **物理配对 v2、ABI 2.3 通用消息通道和 ABI 2.2 单所有权 CoC**。配合 photoframe v21 与浏览器插件 0.3.1，手机 Web GATT 已完成签名显示回执及人眼画面、方向、颜色验收：67,626 字节上传 7.9 秒，刷新等待 20.3 秒。接口见 [ABI 2.3](docs/abi-2-3-channel.md)，完整证据见 [当前状态](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-status.md)。本轮没有重新验收首次物理配对、长按换绑、手机原生 CoC 或 Wi-Fi。
+当前宿主提供 **物理配对 v2、ABI 2.3 通用消息通道和 ABI 2.2 单所有权 CoC**。配合 photoframe v21 与浏览器插件 0.3.1，手机 Web GATT 已完成签名显示回执及人眼画面、方向、颜色验收：67,626 字节上传 7.9 秒，刷新等待 20.3 秒。接口见 [ABI 2.3](docs/abi-2-3-channel.md)，完整证据见 [当前状态](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-versions-and-limits.md)。本轮没有重新验收首次物理配对、长按换绑、手机原生 CoC 或 Wi-Fi。
 
 **版本与证据：**宿主源码、装机二进制摘要、APP/插件版本和不同平台的实测范围分别记录；2026-10-27 的 v20/Mac CoC 成功仍保留为历史证据，不能代替新版本或其他平台验收。
 
@@ -24,7 +24,7 @@
 
 v2 不读取或接受旧 `push_token`，BLE op 1 永久拒绝；旧 `/api/push`、`/api/module`、`/api/wifi` 返回 410，不执行请求。`GET /health` 保留无显示副作用的存活探测。已配对 owner 继续通过 BLE 执行应用管理；Wi-Fi 配置仍可通过既有 SD/USB 维护，不能拿旧 token 绕过物理解绑。
 
-相框 APP 保留自己的收图、校验、断线处理与完成回执；宿主提供通用通信、鉴权、OTA、调度和显示。2026-10-27 的 CoC 扩展改善连续传输，不把 PNG 业务移回宿主。当前验收范围见 [状态页](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-status.md)。保留旧兼容通道，不继续扩展专用 PNG 宿主协议。
+相框 APP 保留自己的收图、校验、断线处理与完成回执；宿主提供通用通信、鉴权、OTA、调度和显示。2026-10-27 的 CoC 扩展改善连续传输，不把 PNG 业务移回宿主。当前验收范围见 [状态页](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-versions-and-limits.md)。保留旧兼容通道，不继续扩展专用 PNG 宿主协议。
 
 ## 框架开发与验证
 

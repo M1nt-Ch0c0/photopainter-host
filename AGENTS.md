@@ -1,6 +1,6 @@
 # PhotoPainter host agent guide
 
-**Current source baseline (2026-10-29):** ABI 2.3 authenticated message mailbox, existing ABI 2.2 CoC and persistent physical pairing v2. Host, photoframe v21 and plugin 0.3.1 are deployed; phone Web GATT returned a matching physical-completion receipt and the user confirmed image/orientation/colors. Saved-bond authentication and binding retention were exercised; the complete fresh-pair/reset and cross-platform matrix is not claimed. Source, deployment and evidence remain separate in the [status matrix](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-status.md).
+**Current source baseline (2026-10-29):** ABI 2.3 authenticated message mailbox, existing ABI 2.2 CoC and persistent physical pairing v2. Host, photoframe v21 and plugin 0.3.1 are deployed; phone Web GATT returned a matching physical-completion receipt and the user confirmed image/orientation/colors. Saved-bond authentication and binding retention were exercised; the complete fresh-pair/reset and cross-platform matrix is not claimed. Source, deployment and evidence remain separate in the [status matrix](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-versions-and-limits.md).
 
 This is the canonical entry point for AI-assisted work on the three-repository PhotoPainter system. For a new computer, deployment, cross-repository change, or hardware investigation, read the complete project skill at [.agents/skills/develop-photopainter-stack/SKILL.md](.agents/skills/develop-photopainter-stack/SKILL.md) before acting.
 

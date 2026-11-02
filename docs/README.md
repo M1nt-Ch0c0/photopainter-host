@@ -28,4 +28,4 @@
 - [Mac 离线图片、回执及内存](validation-ble-images.md)
 - [2026-10-29 配对 v2 离线验证](validation-pairing-v2-2026-10-29.md)：尚未实机验证
 
-photoframe v20 已在 2026-10-27 使用 ABI 2.2 CoC 实机收图并返回物理完成回执。源码发布、最新设备目录及剩余验证范围见 [状态页](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-status.md)。旧测试通过不能计为新代码全面回归。
+photoframe v20 已在 2026-10-27 使用 ABI 2.2 CoC 实机收图并返回物理完成回执。源码发布、最新设备目录及剩余验证范围见 [状态页](https://github.com/M1nt-Ch0c0/esp32s3/blob/main/docs/09-versions-and-limits.md)。旧测试通过不能计为新代码全面回归。
